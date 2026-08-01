@@ -10,6 +10,7 @@ const scripts = [
   'extension-loading.mjs',
   'profile-persistence.mjs',
   'session-view.mjs',
+  'node-sdk.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

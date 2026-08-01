@@ -16,6 +16,7 @@
     "extensions": "node extension-loading.mjs",
     "profiles": "node profile-persistence.mjs",
     "view": "node session-view.mjs",
+    "node-sdk": "node node-sdk.mjs",
     "body-limit": "node body-limit.mjs",
     "launch-queue-timeout": "node launch-queue-timeout.mjs",
     "readiness": "node readiness.mjs",
