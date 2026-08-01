@@ -11,6 +11,7 @@
     "compose-token": "node compose-token.mjs",
     "deployment-docs": "node deployment-docs.mjs",
     "rate-limit": "node rate-limit.mjs",
+    "readiness": "node readiness.mjs",
     "rss-limit": "node rss-limit.mjs",
     "stealth": "node stealth-check.mjs",
     "load": "node load-test.mjs",

@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     http::{HeaderValue, Method, Request, Response, StatusCode, Uri, header},
 };
-use eiger_api::{ApiState, router};
+use eiger_api::{ApiState, api_router, liveness_router};
 use eiger_config::AppConfig;
 use eiger_pool::SessionPool;
 use tokio::net::TcpListener;
@@ -24,7 +24,8 @@ async fn main() -> anyhow::Result<()> {
     let config = AppConfig::from_env().context("failed to load configuration")?;
     let pool = SessionPool::from_config(&config);
     let _maintenance_task = pool.clone().spawn_maintenance();
-    let app = server_layers(router(ApiState::new(pool, &config)), &config)?;
+    let state = ApiState::new(pool, &config);
+    let app = server_layers(state, &config)?;
 
     let listener = TcpListener::bind(config.bind_addr)
         .await
@@ -40,8 +41,9 @@ async fn main() -> anyhow::Result<()> {
     .context("server error")
 }
 
-fn server_layers(app: Router, config: &AppConfig) -> anyhow::Result<Router> {
-    let app = add_rate_limit_layers(app, config)?;
+fn server_layers(state: ApiState, config: &AppConfig) -> anyhow::Result<Router> {
+    let api = add_rate_limit_layers(api_router(state.clone()), config)?;
+    let app = liveness_router(state).merge(api);
     let app = if config.http.cors_origins.is_empty() {
         app
     } else {

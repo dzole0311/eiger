@@ -7,6 +7,7 @@ const scripts = [
   'rate-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',
+  'readiness.mjs',
   'stealth-check.mjs',
   'process-reap.mjs',
   'adversarial-disconnect.mjs',
