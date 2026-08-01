@@ -8,6 +8,7 @@
     "adversarial": "node adversarial-disconnect.mjs",
     "process-reap": "node process-reap.mjs",
     "cors": "node cors-policy.mjs",
+    "compose-token": "node compose-token.mjs",
     "rate-limit": "node rate-limit.mjs",
     "rss-limit": "node rss-limit.mjs",
     "stealth": "node stealth-check.mjs",

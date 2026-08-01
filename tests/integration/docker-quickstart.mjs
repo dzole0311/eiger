@@ -5,10 +5,11 @@ import { runNodeScript, sleep } from './_helpers.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const composeFile = path.join(repoRoot, 'docker/docker-compose.yml');
+const dockerEnv = { ...process.env, EIGER_TOKEN: 'integration-secret' };
 const startedAt = Date.now();
 
 try {
-  await run('docker', ['compose', '-f', composeFile, 'up', '--build', '-d'], repoRoot);
+  await run('docker', ['compose', '-f', composeFile, 'up', '--build', '-d'], repoRoot, { env: dockerEnv });
 
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
@@ -25,17 +26,17 @@ try {
 
   await runNodeScript('puppeteer-smoke.mjs', {
     EIGER_HOST: '127.0.0.1:3000',
-    EIGER_TOKEN: 'change-me',
+    EIGER_TOKEN: dockerEnv.EIGER_TOKEN,
   });
 
   console.log(JSON.stringify({ ok: true, elapsedSeconds: Math.round((Date.now() - startedAt) / 1000) }));
 } finally {
-  await run('docker', ['compose', '-f', composeFile, 'down', '--remove-orphans'], repoRoot, { allowFailure: true });
+  await run('docker', ['compose', '-f', composeFile, 'down', '--remove-orphans'], repoRoot, { allowFailure: true, env: dockerEnv });
 }
 
-async function run(command, args, cwd, { allowFailure = false } = {}) {
+async function run(command, args, cwd, { allowFailure = false, env = process.env } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: 'inherit' });
+    const child = spawn(command, args, { cwd, stdio: 'inherit', env });
     child.once('exit', (code) => {
       if (code === 0 || allowFailure) resolve();
       else reject(new Error(`${command} ${args.join(' ')} exited ${code}`));
