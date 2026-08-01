@@ -50,6 +50,7 @@ Useful environment variables:
 |---|---:|---|
 | `EIGER_BIND_ADDR` | `0.0.0.0:3000` | HTTP/WebSocket bind address |
 | `EIGER_TOKEN` | unset | Optional shared bearer/query token |
+| `EIGER_CORS_ORIGINS` | unset | Comma-separated exact origins allowed by CORS |
 | `EIGER_CHROME_EXECUTABLE` | auto-detect | Chrome/Chromium executable path |
 | `EIGER_CHROME_NO_SANDBOX` | `true` | Adds `--no-sandbox`, pragmatic for containers |
 | `EIGER_CHROME_ARGS` | unset | Extra whitespace-separated Chrome flags |

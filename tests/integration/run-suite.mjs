@@ -1,6 +1,7 @@
 import { runNodeScript } from './_helpers.mjs';
 
 const scripts = [
+  'cors-policy.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',
   'stealth-check.mjs',
