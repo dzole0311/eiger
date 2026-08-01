@@ -6,6 +6,8 @@ use thiserror::Error;
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:3000";
 const DEFAULT_MAX_CONCURRENT_SESSIONS: usize = 4;
 const DEFAULT_PER_SESSION_RSS_MB: u64 = 1536;
+const DEFAULT_RATE_LIMIT_RPS: u32 = 10;
+const DEFAULT_RATE_LIMIT_BURST: u32 = 20;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +15,7 @@ pub struct AppConfig {
     pub bind_addr: SocketAddr,
     pub auth: AuthConfig,
     pub http: HttpConfig,
+    pub rate_limit: RateLimitConfig,
     pub browser: BrowserConfig,
     pub pool: PoolConfig,
     pub stealth: StealthConfig,
@@ -28,6 +31,13 @@ pub struct AuthConfig {
 #[serde(rename_all = "camelCase")]
 pub struct HttpConfig {
     pub cors_origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitConfig {
+    pub requests_per_second: u32,
+    pub burst: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +81,9 @@ impl AppConfig {
         let bind_addr = parse_env("EIGER_BIND_ADDR", DEFAULT_BIND_ADDR)?;
         let token = optional_env("EIGER_TOKEN");
         let cors_origins = comma_separated_env("EIGER_CORS_ORIGINS");
+        let rate_limit_rps = positive_u32_env("EIGER_RATE_LIMIT_RPS", DEFAULT_RATE_LIMIT_RPS)?;
+        let rate_limit_burst =
+            positive_u32_env("EIGER_RATE_LIMIT_BURST", DEFAULT_RATE_LIMIT_BURST)?;
         let executable = optional_env("EIGER_CHROME_EXECUTABLE").map(PathBuf::from);
         let no_sandbox = parse_env("EIGER_CHROME_NO_SANDBOX", "true")?;
         let launch_timeout = seconds_env("EIGER_BROWSER_LAUNCH_TIMEOUT_SECS", 10)?;
@@ -104,6 +117,10 @@ impl AppConfig {
             bind_addr,
             auth: AuthConfig { token },
             http: HttpConfig { cors_origins },
+            rate_limit: RateLimitConfig {
+                requests_per_second: rate_limit_rps,
+                burst: rate_limit_burst,
+            },
             browser: BrowserConfig {
                 executable,
                 no_sandbox,
@@ -166,6 +183,17 @@ fn mb_env(name: &'static str, default: u64) -> Result<u64, ConfigError> {
     parse_env(name, &default.to_string())
 }
 
+fn positive_u32_env(name: &'static str, default: u32) -> Result<u32, ConfigError> {
+    let value = parse_env::<u32>(name, &default.to_string())?;
+    if value == 0 {
+        return Err(ConfigError::InvalidValue {
+            name,
+            value: value.to_string(),
+        });
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +205,10 @@ mod tests {
             auth: AuthConfig { token: None },
             http: HttpConfig {
                 cors_origins: Vec::new(),
+            },
+            rate_limit: RateLimitConfig {
+                requests_per_second: DEFAULT_RATE_LIMIT_RPS,
+                burst: DEFAULT_RATE_LIMIT_BURST,
             },
             browser: BrowserConfig {
                 executable: None,
@@ -201,6 +233,8 @@ mod tests {
 
         assert_eq!(config.pool.max_concurrent_sessions, 4);
         assert_eq!(config.pool.per_session_rss_limit_bytes, 1536 * 1024 * 1024);
+        assert_eq!(config.rate_limit.requests_per_second, 10);
+        assert_eq!(config.rate_limit.burst, 20);
         assert!(config.browser.no_sandbox);
         assert!(config.stealth.enabled);
     }

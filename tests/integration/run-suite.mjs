@@ -2,6 +2,7 @@ import { runNodeScript } from './_helpers.mjs';
 
 const scripts = [
   'cors-policy.mjs',
+  'rate-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',
   'stealth-check.mjs',
