@@ -265,6 +265,7 @@ name = "eiger-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "eiger-config",
  "eiger-metrics",

@@ -84,6 +84,18 @@ Useful environment variables:
 curl -X POST 'http://127.0.0.1:3000/sessions'
 ```
 
+`POST /scrape` navigates a transient Chrome session and returns `{ html, title, url }`:
+
+```bash
+curl -X POST 'http://127.0.0.1:3000/scrape' \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://example.com","waitUntil":"domcontentloaded","timeoutMs":30000}'
+```
+
+`POST /screenshot` returns raw PNG or JPEG bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `fullPage`, and `format`.
+
+`POST /pdf` returns raw PDF bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `format`, `landscape`, and `printBackground`.
+
 `GET /sessions` lists active sessions with state, age, RSS, and CPU.
 
 `GET /sessions/:id`, `DELETE /sessions/:id`, and `GET /sessions/:id/cdp` inspect, delete, and connect to a pre-warmed session.
