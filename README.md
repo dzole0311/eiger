@@ -78,6 +78,8 @@ Useful environment variables:
 
 `GET /session` or `GET /` upgrades to a WebSocket, allocates a fresh Chromium session, proxies CDP to it, and recycles it when the WebSocket disconnects.
 
+Pass `proxy=http://host:port` on `/session` or in session JSON bodies to launch Chrome with a single proxy server. This is a direct passthrough to Chrome. It does not rotate proxies or add credentials.
+
 `POST /sessions` pre-warms a browser session and returns an Eiger CDP WebSocket URL:
 
 ```bash

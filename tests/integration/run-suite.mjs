@@ -6,6 +6,7 @@ const scripts = [
   'cors-policy.mjs',
   'rate-limit.mjs',
   'rest-endpoints.mjs',
+  'proxy-passthrough.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

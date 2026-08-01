@@ -29,6 +29,7 @@ pub struct ChromeLaunchOptions {
     pub close_timeout: Duration,
     pub terminate_timeout: Duration,
     pub additional_args: Vec<String>,
+    pub proxy: Option<String>,
     pub stealth: StealthProfile,
 }
 
@@ -579,6 +580,14 @@ fn chrome_args(user_data_dir: &Path, options: &ChromeLaunchOptions) -> Vec<Strin
         args.push("--no-sandbox".to_owned());
     }
 
+    if let Some(proxy) = options
+        .proxy
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        args.push(format!("--proxy-server={}", proxy.trim()));
+    }
+
     args.extend(options.stealth.chrome_args());
     args.extend(options.additional_args.clone());
     args.push("about:blank".to_owned());
@@ -727,7 +736,8 @@ mod tests {
             launch_timeout: Duration::from_secs(10),
             close_timeout: Duration::from_secs(3),
             terminate_timeout: Duration::from_secs(2),
-            additional_args: vec!["--proxy-server=http://proxy.local:8080".to_owned()],
+            additional_args: Vec::new(),
+            proxy: Some("http://proxy.local:8080".to_owned()),
             stealth: StealthProfile::new(true, None),
         };
 
@@ -739,5 +749,24 @@ mod tests {
         assert!(args.contains(&"--no-sandbox".to_owned()));
         assert!(args.contains(&"--proxy-server=http://proxy.local:8080".to_owned()));
         assert!(!args.contains(&"--enable-automation".to_owned()));
+    }
+
+    #[test]
+    fn chrome_args_omit_proxy_when_unset() {
+        let options = ChromeLaunchOptions {
+            executable: None,
+            no_sandbox: false,
+            launch_timeout: Duration::from_secs(10),
+            close_timeout: Duration::from_secs(3),
+            terminate_timeout: Duration::from_secs(2),
+            additional_args: Vec::new(),
+            proxy: None,
+            stealth: StealthProfile::new(false, None),
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let args = chrome_args(temp_dir.path(), &options);
+
+        assert!(!args.iter().any(|arg| arg.starts_with("--proxy-server=")));
     }
 }

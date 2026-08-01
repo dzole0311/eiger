@@ -83,6 +83,7 @@ struct SessionQuery {
     token: Option<String>,
     stealth: Option<bool>,
     launch: Option<String>,
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +91,7 @@ struct SessionQuery {
 struct CreateSessionRequest {
     stealth_enabled: Option<bool>,
     extra_chrome_args: Option<Vec<String>>,
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +100,7 @@ struct ScrapeRequest {
     url: String,
     wait_until: Option<String>,
     timeout_ms: Option<u64>,
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +111,7 @@ struct ScreenshotRequest {
     timeout_ms: Option<u64>,
     full_page: Option<bool>,
     format: Option<String>,
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +123,7 @@ struct PdfRequest {
     format: Option<String>,
     landscape: Option<bool>,
     print_background: Option<bool>,
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +131,7 @@ struct PdfRequest {
 struct LaunchQuery {
     args: Option<Vec<String>>,
     stealth: Option<bool>,
+    proxy: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,11 +330,12 @@ async fn scrape(
         return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
+    let proxy = payload.proxy.clone();
     let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let overrides = match session_overrides(&query, None) {
+    let overrides = match rest_session_overrides(&query, proxy) {
         Ok(overrides) => overrides,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
     };
@@ -353,6 +360,7 @@ async fn screenshot(
         return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
+    let proxy = payload.proxy.clone();
     let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
@@ -362,7 +370,7 @@ async fn screenshot(
         Err(error) => return rest_endpoint_error(error),
     };
     let full_page = payload.full_page.unwrap_or(false);
-    let overrides = match session_overrides(&query, None) {
+    let overrides = match rest_session_overrides(&query, proxy) {
         Ok(overrides) => overrides,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
     };
@@ -391,6 +399,7 @@ async fn pdf(
         return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
+    let proxy = payload.proxy.clone();
     let options = match page_load_options(
         payload.url.clone(),
         payload.wait_until.clone(),
@@ -403,7 +412,7 @@ async fn pdf(
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let overrides = match session_overrides(&query, None) {
+    let overrides = match rest_session_overrides(&query, proxy) {
         Ok(overrides) => overrides,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
     };
@@ -1221,6 +1230,14 @@ fn session_overrides(
     let query_stealth = query
         .stealth
         .or_else(|| launch.as_ref().and_then(|launch| launch.stealth));
+    let payload_proxy = payload
+        .as_ref()
+        .and_then(|payload| trimmed_optional(payload.proxy.as_deref()));
+    let query_proxy = trimmed_optional(query.proxy.as_deref()).or_else(|| {
+        launch
+            .as_ref()
+            .and_then(|launch| trimmed_optional(launch.proxy.as_deref()))
+    });
 
     if let Some(payload) = payload
         && let Some(args) = payload.extra_chrome_args
@@ -1231,7 +1248,28 @@ fn session_overrides(
     Ok(SessionOverrides {
         stealth_enabled: payload_stealth.or(query_stealth),
         extra_chrome_args,
+        proxy: payload_proxy.or(query_proxy),
     })
+}
+
+fn rest_session_overrides(
+    query: &SessionQuery,
+    proxy: Option<String>,
+) -> Result<SessionOverrides, String> {
+    let payload = proxy.map(|proxy| CreateSessionRequest {
+        stealth_enabled: None,
+        extra_chrome_args: None,
+        proxy: Some(proxy),
+    });
+
+    session_overrides(query, payload)
+}
+
+fn trimmed_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn parse_launch_query(raw_launch: Option<&str>) -> Result<Option<LaunchQuery>, String> {
@@ -1324,17 +1362,16 @@ mod tests {
             token: None,
             stealth: None,
             launch: Some(
-                r#"{"args":["--proxy-server=http://proxy.local:8080"],"stealth":false}"#.to_owned(),
+                r#"{"args":["--window-size=1280,720"],"stealth":false,"proxy":"http://proxy.local:8080"}"#.to_owned(),
             ),
+            proxy: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid launch query");
 
         assert_eq!(overrides.stealth_enabled, Some(false));
-        assert_eq!(
-            overrides.extra_chrome_args,
-            vec!["--proxy-server=http://proxy.local:8080"]
-        );
+        assert_eq!(overrides.extra_chrome_args, vec!["--window-size=1280,720"]);
+        assert_eq!(overrides.proxy.as_deref(), Some("http://proxy.local:8080"));
     }
 
     #[test]
@@ -1343,11 +1380,34 @@ mod tests {
             token: None,
             stealth: Some(true),
             launch: Some(r#"{"stealth":false}"#.to_owned()),
+            proxy: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid launch query");
 
         assert_eq!(overrides.stealth_enabled, Some(true));
+    }
+
+    #[test]
+    fn payload_proxy_overrides_query_proxy() {
+        let query = SessionQuery {
+            token: None,
+            stealth: None,
+            launch: None,
+            proxy: Some("http://query-proxy.local:8080".to_owned()),
+        };
+        let payload = CreateSessionRequest {
+            stealth_enabled: None,
+            extra_chrome_args: None,
+            proxy: Some("http://payload-proxy.local:8080".to_owned()),
+        };
+
+        let overrides = session_overrides(&query, Some(payload)).expect("valid overrides");
+
+        assert_eq!(
+            overrides.proxy.as_deref(),
+            Some("http://payload-proxy.local:8080")
+        );
     }
 
     #[test]

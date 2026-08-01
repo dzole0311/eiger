@@ -54,6 +54,7 @@ impl fmt::Display for SessionState {
 pub struct SessionOverrides {
     pub stealth_enabled: Option<bool>,
     pub extra_chrome_args: Vec<String>,
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,6 +173,7 @@ impl SessionPool {
                 close_timeout: config.browser.close_timeout,
                 terminate_timeout: config.browser.terminate_timeout,
                 additional_args: config.browser.additional_args.clone(),
+                proxy: None,
                 stealth: StealthProfile::new(
                     config.stealth.enabled,
                     config.browser.user_agent.clone(),
@@ -225,6 +227,7 @@ impl SessionPool {
         if let Some(enabled) = overrides.stealth_enabled {
             launch_options.stealth.enabled = enabled;
         }
+        launch_options.proxy = overrides.proxy;
         launch_options
             .additional_args
             .extend(overrides.extra_chrome_args);
