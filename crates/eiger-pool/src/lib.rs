@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -55,6 +56,7 @@ pub struct SessionOverrides {
     pub stealth_enabled: Option<bool>,
     pub extra_chrome_args: Vec<String>,
     pub proxy: Option<String>,
+    pub extension_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,6 +176,7 @@ impl SessionPool {
                 terminate_timeout: config.browser.terminate_timeout,
                 additional_args: config.browser.additional_args.clone(),
                 proxy: None,
+                extension_paths: Vec::new(),
                 stealth: StealthProfile::new(
                     config.stealth.enabled,
                     config.browser.user_agent.clone(),
@@ -228,6 +231,7 @@ impl SessionPool {
             launch_options.stealth.enabled = enabled;
         }
         launch_options.proxy = overrides.proxy;
+        launch_options.extension_paths = overrides.extension_paths;
         launch_options
             .additional_args
             .extend(overrides.extra_chrome_args);

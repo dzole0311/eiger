@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -84,6 +85,7 @@ struct SessionQuery {
     stealth: Option<bool>,
     launch: Option<String>,
     proxy: Option<String>,
+    extension_paths: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +94,7 @@ struct CreateSessionRequest {
     stealth_enabled: Option<bool>,
     extra_chrome_args: Option<Vec<String>>,
     proxy: Option<String>,
+    extension_paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +104,7 @@ struct ScrapeRequest {
     wait_until: Option<String>,
     timeout_ms: Option<u64>,
     proxy: Option<String>,
+    extension_paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +116,7 @@ struct ScreenshotRequest {
     full_page: Option<bool>,
     format: Option<String>,
     proxy: Option<String>,
+    extension_paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +129,7 @@ struct PdfRequest {
     landscape: Option<bool>,
     print_background: Option<bool>,
     proxy: Option<String>,
+    extension_paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +138,7 @@ struct LaunchQuery {
     args: Option<Vec<String>>,
     stealth: Option<bool>,
     proxy: Option<String>,
+    extension_paths: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -331,11 +338,12 @@ async fn scrape(
     }
 
     let proxy = payload.proxy.clone();
+    let extension_paths = payload.extension_paths.clone();
     let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let overrides = match rest_session_overrides(&query, proxy) {
+    let overrides = match rest_session_overrides(&query, proxy, extension_paths) {
         Ok(overrides) => overrides,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
     };
@@ -361,6 +369,7 @@ async fn screenshot(
     }
 
     let proxy = payload.proxy.clone();
+    let extension_paths = payload.extension_paths.clone();
     let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
@@ -370,7 +379,7 @@ async fn screenshot(
         Err(error) => return rest_endpoint_error(error),
     };
     let full_page = payload.full_page.unwrap_or(false);
-    let overrides = match rest_session_overrides(&query, proxy) {
+    let overrides = match rest_session_overrides(&query, proxy, extension_paths) {
         Ok(overrides) => overrides,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
     };
@@ -400,6 +409,7 @@ async fn pdf(
     }
 
     let proxy = payload.proxy.clone();
+    let extension_paths = payload.extension_paths.clone();
     let options = match page_load_options(
         payload.url.clone(),
         payload.wait_until.clone(),
@@ -412,7 +422,7 @@ async fn pdf(
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let overrides = match rest_session_overrides(&query, proxy) {
+    let overrides = match rest_session_overrides(&query, proxy, extension_paths) {
         Ok(overrides) => overrides,
         Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
     };
@@ -1238,6 +1248,24 @@ fn session_overrides(
             .as_ref()
             .and_then(|launch| trimmed_optional(launch.proxy.as_deref()))
     });
+    let payload_extension_paths = payload
+        .as_ref()
+        .and_then(|payload| payload.extension_paths.clone())
+        .map(clean_extension_paths)
+        .unwrap_or_default();
+    let query_extension_paths = parse_query_extension_paths(query.extension_paths.as_deref());
+    let launch_extension_paths = launch
+        .as_ref()
+        .and_then(|launch| launch.extension_paths.clone())
+        .map(clean_extension_paths)
+        .unwrap_or_default();
+    let extension_paths = if !payload_extension_paths.is_empty() {
+        payload_extension_paths
+    } else if !query_extension_paths.is_empty() {
+        query_extension_paths
+    } else {
+        launch_extension_paths
+    };
 
     if let Some(payload) = payload
         && let Some(args) = payload.extra_chrome_args
@@ -1249,20 +1277,47 @@ fn session_overrides(
         stealth_enabled: payload_stealth.or(query_stealth),
         extra_chrome_args,
         proxy: payload_proxy.or(query_proxy),
+        extension_paths,
     })
 }
 
 fn rest_session_overrides(
     query: &SessionQuery,
     proxy: Option<String>,
+    extension_paths: Option<Vec<PathBuf>>,
 ) -> Result<SessionOverrides, String> {
-    let payload = proxy.map(|proxy| CreateSessionRequest {
-        stealth_enabled: None,
-        extra_chrome_args: None,
-        proxy: Some(proxy),
-    });
+    let payload = if proxy.is_some() || extension_paths.is_some() {
+        Some(CreateSessionRequest {
+            stealth_enabled: None,
+            extra_chrome_args: None,
+            proxy,
+            extension_paths,
+        })
+    } else {
+        None
+    };
 
     session_overrides(query, payload)
+}
+
+fn parse_query_extension_paths(value: Option<&str>) -> Vec<PathBuf> {
+    value
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn clean_extension_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .into_iter()
+        .filter(|path| !path.as_os_str().is_empty())
+        .collect()
 }
 
 fn trimmed_optional(value: Option<&str>) -> Option<String> {
@@ -1362,9 +1417,10 @@ mod tests {
             token: None,
             stealth: None,
             launch: Some(
-                r#"{"args":["--window-size=1280,720"],"stealth":false,"proxy":"http://proxy.local:8080"}"#.to_owned(),
+                r#"{"args":["--window-size=1280,720"],"stealth":false,"proxy":"http://proxy.local:8080","extensionPaths":["/tmp/eiger-extension"]}"#.to_owned(),
             ),
             proxy: None,
+            extension_paths: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid launch query");
@@ -1372,6 +1428,10 @@ mod tests {
         assert_eq!(overrides.stealth_enabled, Some(false));
         assert_eq!(overrides.extra_chrome_args, vec!["--window-size=1280,720"]);
         assert_eq!(overrides.proxy.as_deref(), Some("http://proxy.local:8080"));
+        assert_eq!(
+            overrides.extension_paths,
+            vec![PathBuf::from("/tmp/eiger-extension")]
+        );
     }
 
     #[test]
@@ -1381,6 +1441,7 @@ mod tests {
             stealth: Some(true),
             launch: Some(r#"{"stealth":false}"#.to_owned()),
             proxy: None,
+            extension_paths: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid launch query");
@@ -1395,11 +1456,13 @@ mod tests {
             stealth: None,
             launch: None,
             proxy: Some("http://query-proxy.local:8080".to_owned()),
+            extension_paths: None,
         };
         let payload = CreateSessionRequest {
             stealth_enabled: None,
             extra_chrome_args: None,
             proxy: Some("http://payload-proxy.local:8080".to_owned()),
+            extension_paths: None,
         };
 
         let overrides = session_overrides(&query, Some(payload)).expect("valid overrides");
@@ -1407,6 +1470,27 @@ mod tests {
         assert_eq!(
             overrides.proxy.as_deref(),
             Some("http://payload-proxy.local:8080")
+        );
+    }
+
+    #[test]
+    fn query_extension_paths_are_comma_separated() {
+        let query = SessionQuery {
+            token: None,
+            stealth: None,
+            launch: None,
+            proxy: None,
+            extension_paths: Some("/opt/eiger/one, /opt/eiger/two".to_owned()),
+        };
+
+        let overrides = session_overrides(&query, None).expect("valid overrides");
+
+        assert_eq!(
+            overrides.extension_paths,
+            vec![
+                PathBuf::from("/opt/eiger/one"),
+                PathBuf::from("/opt/eiger/two")
+            ]
         );
     }
 
