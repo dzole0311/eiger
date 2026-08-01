@@ -86,6 +86,7 @@ struct SessionQuery {
     launch: Option<String>,
     proxy: Option<String>,
     extension_paths: Option<String>,
+    persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +96,7 @@ struct CreateSessionRequest {
     extra_chrome_args: Option<Vec<String>>,
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
+    persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +107,7 @@ struct ScrapeRequest {
     timeout_ms: Option<u64>,
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
+    persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +120,7 @@ struct ScreenshotRequest {
     format: Option<String>,
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
+    persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +134,7 @@ struct PdfRequest {
     print_background: Option<bool>,
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
+    persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +144,7 @@ struct LaunchQuery {
     stealth: Option<bool>,
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
+    persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -339,14 +345,16 @@ async fn scrape(
 
     let proxy = payload.proxy.clone();
     let extension_paths = payload.extension_paths.clone();
+    let persistent_profile_id = payload.persistent_profile_id.clone();
     let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let overrides = match rest_session_overrides(&query, proxy, extension_paths) {
-        Ok(overrides) => overrides,
-        Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
-    };
+    let overrides =
+        match rest_session_overrides(&query, proxy, extension_paths, persistent_profile_id) {
+            Ok(overrides) => overrides,
+            Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
+        };
 
     match with_rest_session(&state, overrides, |handle| {
         scrape_with_session(handle, options)
@@ -370,6 +378,7 @@ async fn screenshot(
 
     let proxy = payload.proxy.clone();
     let extension_paths = payload.extension_paths.clone();
+    let persistent_profile_id = payload.persistent_profile_id.clone();
     let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
@@ -379,10 +388,11 @@ async fn screenshot(
         Err(error) => return rest_endpoint_error(error),
     };
     let full_page = payload.full_page.unwrap_or(false);
-    let overrides = match rest_session_overrides(&query, proxy, extension_paths) {
-        Ok(overrides) => overrides,
-        Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
-    };
+    let overrides =
+        match rest_session_overrides(&query, proxy, extension_paths, persistent_profile_id) {
+            Ok(overrides) => overrides,
+            Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
+        };
 
     match with_rest_session(&state, overrides, |handle| {
         screenshot_with_session(handle, options, format, full_page)
@@ -410,6 +420,7 @@ async fn pdf(
 
     let proxy = payload.proxy.clone();
     let extension_paths = payload.extension_paths.clone();
+    let persistent_profile_id = payload.persistent_profile_id.clone();
     let options = match page_load_options(
         payload.url.clone(),
         payload.wait_until.clone(),
@@ -422,10 +433,11 @@ async fn pdf(
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let overrides = match rest_session_overrides(&query, proxy, extension_paths) {
-        Ok(overrides) => overrides,
-        Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
-    };
+    let overrides =
+        match rest_session_overrides(&query, proxy, extension_paths, persistent_profile_id) {
+            Ok(overrides) => overrides,
+            Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
+        };
 
     match with_rest_session(&state, overrides, |handle| {
         pdf_with_session(handle, options, print_options)
@@ -1266,6 +1278,14 @@ fn session_overrides(
     } else {
         launch_extension_paths
     };
+    let payload_profile_id = payload
+        .as_ref()
+        .and_then(|payload| trimmed_optional(payload.persistent_profile_id.as_deref()));
+    let query_profile_id = trimmed_optional(query.persistent_profile_id.as_deref()).or_else(|| {
+        launch
+            .as_ref()
+            .and_then(|launch| trimmed_optional(launch.persistent_profile_id.as_deref()))
+    });
 
     if let Some(payload) = payload
         && let Some(args) = payload.extra_chrome_args
@@ -1278,6 +1298,7 @@ fn session_overrides(
         extra_chrome_args,
         proxy: payload_proxy.or(query_proxy),
         extension_paths,
+        persistent_profile_id: payload_profile_id.or(query_profile_id),
     })
 }
 
@@ -1285,13 +1306,16 @@ fn rest_session_overrides(
     query: &SessionQuery,
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
+    persistent_profile_id: Option<String>,
 ) -> Result<SessionOverrides, String> {
-    let payload = if proxy.is_some() || extension_paths.is_some() {
+    let payload = if proxy.is_some() || extension_paths.is_some() || persistent_profile_id.is_some()
+    {
         Some(CreateSessionRequest {
             stealth_enabled: None,
             extra_chrome_args: None,
             proxy,
             extension_paths,
+            persistent_profile_id,
         })
     } else {
         None
@@ -1368,6 +1392,9 @@ fn pool_error(error: PoolError) -> Response {
         PoolError::AtCapacity | PoolError::CapacityTimeout => {
             api_error(StatusCode::SERVICE_UNAVAILABLE, error.to_string())
         }
+        PoolError::PersistentProfilesDisabled | PoolError::InvalidPersistentProfileId(_) => {
+            api_error(StatusCode::BAD_REQUEST, error.to_string())
+        }
         PoolError::NotFound(_) => api_error(StatusCode::NOT_FOUND, error.to_string()),
         PoolError::NotConnectable(_) => api_error(StatusCode::CONFLICT, error.to_string()),
         PoolError::Browser(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -1421,6 +1448,7 @@ mod tests {
             ),
             proxy: None,
             extension_paths: None,
+            persistent_profile_id: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid launch query");
@@ -1442,6 +1470,7 @@ mod tests {
             launch: Some(r#"{"stealth":false}"#.to_owned()),
             proxy: None,
             extension_paths: None,
+            persistent_profile_id: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid launch query");
@@ -1457,12 +1486,14 @@ mod tests {
             launch: None,
             proxy: Some("http://query-proxy.local:8080".to_owned()),
             extension_paths: None,
+            persistent_profile_id: None,
         };
         let payload = CreateSessionRequest {
             stealth_enabled: None,
             extra_chrome_args: None,
             proxy: Some("http://payload-proxy.local:8080".to_owned()),
             extension_paths: None,
+            persistent_profile_id: None,
         };
 
         let overrides = session_overrides(&query, Some(payload)).expect("valid overrides");
@@ -1481,6 +1512,7 @@ mod tests {
             launch: None,
             proxy: None,
             extension_paths: Some("/opt/eiger/one, /opt/eiger/two".to_owned()),
+            persistent_profile_id: None,
         };
 
         let overrides = session_overrides(&query, None).expect("valid overrides");
@@ -1491,6 +1523,32 @@ mod tests {
                 PathBuf::from("/opt/eiger/one"),
                 PathBuf::from("/opt/eiger/two")
             ]
+        );
+    }
+
+    #[test]
+    fn payload_profile_id_overrides_query_profile_id() {
+        let query = SessionQuery {
+            token: None,
+            stealth: None,
+            launch: None,
+            proxy: None,
+            extension_paths: None,
+            persistent_profile_id: Some("query-profile".to_owned()),
+        };
+        let payload = CreateSessionRequest {
+            stealth_enabled: None,
+            extra_chrome_args: None,
+            proxy: None,
+            extension_paths: None,
+            persistent_profile_id: Some("payload-profile".to_owned()),
+        };
+
+        let overrides = session_overrides(&query, Some(payload)).expect("valid overrides");
+
+        assert_eq!(
+            overrides.persistent_profile_id.as_deref(),
+            Some("payload-profile")
         );
     }
 

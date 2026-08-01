@@ -8,6 +8,7 @@ const scripts = [
   'rest-endpoints.mjs',
   'proxy-passthrough.mjs',
   'extension-loading.mjs',
+  'profile-persistence.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

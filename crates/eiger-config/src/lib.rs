@@ -52,6 +52,7 @@ pub struct BrowserConfig {
     pub terminate_timeout: Duration,
     pub additional_args: Vec<String>,
     pub user_agent: Option<String>,
+    pub profile_storage_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +106,7 @@ impl AppConfig {
             })
             .unwrap_or_default();
         let user_agent = optional_env("EIGER_USER_AGENT");
+        let profile_storage_dir = optional_env("EIGER_PROFILE_STORAGE_DIR").map(PathBuf::from);
 
         let max_concurrent_sessions = parse_env(
             "EIGER_MAX_CONCURRENT_SESSIONS",
@@ -138,6 +140,7 @@ impl AppConfig {
                 terminate_timeout,
                 additional_args,
                 user_agent,
+                profile_storage_dir,
             },
             pool: PoolConfig {
                 max_concurrent_sessions,
@@ -239,6 +242,7 @@ mod tests {
                 terminate_timeout: Duration::from_secs(2),
                 additional_args: Vec::new(),
                 user_agent: None,
+                profile_storage_dir: None,
             },
             pool: PoolConfig {
                 max_concurrent_sessions: DEFAULT_MAX_CONCURRENT_SESSIONS,

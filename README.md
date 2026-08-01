@@ -63,6 +63,7 @@ Useful environment variables:
 | `EIGER_CHROME_EXECUTABLE` | auto-detect | Chrome/Chromium executable path. `/ready` stays false until launch succeeds |
 | `EIGER_CHROME_NO_SANDBOX` | `true` | Adds `--no-sandbox`, pragmatic for containers |
 | `EIGER_CHROME_ARGS` | unset | Extra whitespace-separated Chrome flags |
+| `EIGER_PROFILE_STORAGE_DIR` | unset | Base directory for opt-in persistent profiles |
 | `EIGER_MAX_CONCURRENT_SESSIONS` | `4` | Global concurrency bound. `/ready` is false at capacity |
 | `EIGER_LAUNCH_QUEUE_TIMEOUT_SECS` | `15` | Max wait for browser launch capacity |
 | `EIGER_PER_SESSION_RSS_LIMIT_MB` | `1536` | Soft RSS ceiling for the browser process tree |
@@ -81,6 +82,8 @@ Useful environment variables:
 Pass `proxy=http://host:port` on `/session` or in session JSON bodies to launch Chrome with a single proxy server. This is a direct passthrough to Chrome. It does not rotate proxies or add credentials.
 
 Pass `extensionPaths` in JSON bodies or as a comma-separated query value to load unpacked Chrome extensions. Paths must already exist on the host or container filesystem where Eiger runs. Eiger does not upload extension files. Modern Chrome-branded desktop builds block command-line extension loading. Use Chromium or Chrome for Testing for this path.
+
+Set `EIGER_PROFILE_STORAGE_DIR` and pass `persistentProfileId` to reuse a Chrome profile between sessions. Sessions without `persistentProfileId` still use a fresh temporary profile.
 
 `POST /sessions` pre-warms a browser session and returns an Eiger CDP WebSocket URL:
 

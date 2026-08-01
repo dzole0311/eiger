@@ -57,6 +57,7 @@ pub struct SessionOverrides {
     pub extra_chrome_args: Vec<String>,
     pub proxy: Option<String>,
     pub extension_paths: Vec<PathBuf>,
+    pub persistent_profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +100,10 @@ pub enum PoolError {
     NotFound(Uuid),
     #[error("session is not connectable: {0}")]
     NotConnectable(Uuid),
+    #[error("persistent profiles are disabled; set EIGER_PROFILE_STORAGE_DIR")]
+    PersistentProfilesDisabled,
+    #[error("invalid persistent profile id: {0}")]
+    InvalidPersistentProfileId(String),
     #[error("browser launch failed: {0}")]
     Browser(#[from] BrowserError),
 }
@@ -130,6 +135,7 @@ struct PoolOptions {
     per_session_rss_limit_bytes: u64,
     maintenance_interval: Duration,
     cdp_health_interval: Duration,
+    profile_storage_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -167,6 +173,7 @@ impl SessionPool {
                 per_session_rss_limit_bytes: config.pool.per_session_rss_limit_bytes,
                 maintenance_interval: config.pool.maintenance_interval,
                 cdp_health_interval: config.pool.cdp_health_interval,
+                profile_storage_dir: config.browser.profile_storage_dir.clone(),
             },
             browser_options: ChromeLaunchOptions {
                 executable: config.browser.executable.clone(),
@@ -177,6 +184,7 @@ impl SessionPool {
                 additional_args: config.browser.additional_args.clone(),
                 proxy: None,
                 extension_paths: Vec::new(),
+                user_data_dir: None,
                 stealth: StealthProfile::new(
                     config.stealth.enabled,
                     config.browser.user_agent.clone(),
@@ -232,6 +240,14 @@ impl SessionPool {
         }
         launch_options.proxy = overrides.proxy;
         launch_options.extension_paths = overrides.extension_paths;
+        if let Some(profile_id) = overrides.persistent_profile_id {
+            let base_dir = self
+                .options
+                .profile_storage_dir
+                .as_ref()
+                .ok_or(PoolError::PersistentProfilesDisabled)?;
+            launch_options.user_data_dir = Some(profile_path(base_dir, &profile_id)?);
+        }
         launch_options
             .additional_args
             .extend(overrides.extra_chrome_args);
@@ -547,6 +563,21 @@ async fn session_info(entry: Arc<SessionEntry>) -> SessionInfo {
     }
 }
 
+fn profile_path(base_dir: &PathBuf, profile_id: &str) -> Result<PathBuf, PoolError> {
+    let profile_id = profile_id.trim();
+    if profile_id.is_empty()
+        || profile_id == "."
+        || profile_id == ".."
+        || !profile_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        return Err(PoolError::InvalidPersistentProfileId(profile_id.to_owned()));
+    }
+
+    Ok(base_dir.join(profile_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,6 +600,24 @@ mod tests {
         assert!(started_at.elapsed() < Duration::from_secs(1));
     }
 
+    #[test]
+    fn persistent_profile_ids_are_safe_directory_names() {
+        let base_dir = PathBuf::from("/var/lib/eiger-profiles");
+
+        assert_eq!(
+            profile_path(&base_dir, "team_1.dev").unwrap(),
+            base_dir.join("team_1.dev")
+        );
+        assert!(matches!(
+            profile_path(&base_dir, "../escape"),
+            Err(PoolError::InvalidPersistentProfileId(_))
+        ));
+        assert!(matches!(
+            profile_path(&base_dir, ""),
+            Err(PoolError::InvalidPersistentProfileId(_))
+        ));
+    }
+
     fn test_config(max_concurrent_sessions: usize, launch_queue_timeout: Duration) -> AppConfig {
         AppConfig {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -589,6 +638,7 @@ mod tests {
                 terminate_timeout: Duration::from_secs(2),
                 additional_args: Vec::new(),
                 user_agent: None,
+                profile_storage_dir: None,
             },
             pool: PoolConfig {
                 max_concurrent_sessions,
