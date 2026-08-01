@@ -35,6 +35,12 @@ await browser.close();
 
 The Compose file sets `shm_size: "1gb"` on purpose. A small `/dev/shm` is a common cause of Chromium crashes under concurrency in Docker.
 
+## Deployment
+
+Eiger does not terminate TLS. If Eiger is reachable outside a trusted network, put it behind a TLS-terminating reverse proxy. Use nginx, Caddy or Traefik.
+
+Eiger trusts `X-Forwarded-Proto` from that proxy when it builds returned CDP WebSocket URLs. Strip untrusted client-supplied forwarding headers at the proxy.
+
 ## Local Development
 
 Set `EIGER_CHROME_EXECUTABLE` if Chrome or Chromium is not discoverable on your `PATH`.
@@ -48,7 +54,7 @@ Useful environment variables:
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `EIGER_BIND_ADDR` | `0.0.0.0:3000` | HTTP/WebSocket bind address |
+| `EIGER_BIND_ADDR` | `0.0.0.0:3000` | HTTP/WebSocket bind address. Use a TLS proxy for public access |
 | `EIGER_TOKEN` | unset | Optional shared bearer/query token. Required by Compose examples |
 | `EIGER_CORS_ORIGINS` | unset | Comma-separated exact origins allowed by CORS |
 | `EIGER_RATE_LIMIT_RPS` | `10` | Per-IP and per-token request refill rate |
