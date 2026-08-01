@@ -111,6 +111,16 @@ curl -X POST 'http://127.0.0.1:3000/scrape' \
 
 `GET /metrics` returns Prometheus exposition format counters and per-session resource gauges.
 
+## Node Client
+
+A typed Node client lives in `clients/node`.
+
+```bash
+cd clients/node
+npm install
+npm run build
+```
+
 ## Baseline Stealth
 
 Eiger includes baseline evasion and not an anti-bot arms race. It removes the default webdriver marker, strips `HeadlessChrome` from the user agent, sets a sane window size and injects basic navigator/WebGL patches into existing page targets. It does not attempt TLS fingerprint spoofing, CAPTCHA solving, mouse humanization or proxy rotation.
