@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tower_governor::{
     GovernorError, GovernorLayer, governor::GovernorConfigBuilder, key_extractor::KeyExtractor,
 };
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -49,6 +49,9 @@ fn server_layers(state: ApiState, config: &AppConfig) -> anyhow::Result<Router> 
     } else {
         app.layer(cors_layer(config)?)
     };
+    let app = app.layer(RequestBodyLimitLayer::new(
+        config.http.request_body_limit_bytes,
+    ));
 
     Ok(app.layer(TraceLayer::new_for_http()))
 }

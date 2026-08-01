@@ -539,3 +539,60 @@ async fn session_info(entry: Arc<SessionEntry>) -> SessionInfo {
         kill_reason,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eiger_config::{
+        AuthConfig, BrowserConfig, HttpConfig, PoolConfig, RateLimitConfig, StealthConfig,
+    };
+
+    #[tokio::test]
+    async fn create_session_times_out_when_launch_queue_has_no_capacity() {
+        let config = test_config(0, Duration::from_millis(10));
+        let pool = SessionPool::from_config(&config);
+        let started_at = Instant::now();
+
+        let error = match pool.create_session(SessionOverrides::default()).await {
+            Ok(_) => panic!("request should time out before launch"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, PoolError::CapacityTimeout));
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+
+    fn test_config(max_concurrent_sessions: usize, launch_queue_timeout: Duration) -> AppConfig {
+        AppConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            auth: AuthConfig { token: None },
+            http: HttpConfig {
+                cors_origins: Vec::new(),
+                request_body_limit_bytes: 64 * 1024,
+            },
+            rate_limit: RateLimitConfig {
+                requests_per_second: 10,
+                burst: 20,
+            },
+            browser: BrowserConfig {
+                executable: None,
+                no_sandbox: false,
+                launch_timeout: Duration::from_secs(10),
+                close_timeout: Duration::from_secs(3),
+                terminate_timeout: Duration::from_secs(2),
+                additional_args: Vec::new(),
+                user_agent: None,
+            },
+            pool: PoolConfig {
+                max_concurrent_sessions,
+                launch_queue_timeout,
+                max_session_lifetime: Duration::from_secs(30 * 60),
+                max_idle_time: Duration::from_secs(5 * 60),
+                per_session_rss_limit_bytes: 1536 * 1024 * 1024,
+                maintenance_interval: Duration::from_secs(5),
+                cdp_health_interval: Duration::from_secs(30),
+            },
+            stealth: StealthConfig { enabled: true },
+        }
+    }
+}
