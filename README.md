@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/eiger-logo-readme.png" alt="Eiger" width="160">
+</p>
+
 # Eiger
 
 Eiger is a self-hosted headless-browser automation API. It gives Puppeteer and Playwright a stable Chrome DevTools Protocol endpoint with Rust process owning browser lifecycle, resource limits, health checks, etc.
@@ -94,4 +98,3 @@ npm run suite
 ```
 
 See [docs/verification.md](docs/verification.md) for the full suite.
-
