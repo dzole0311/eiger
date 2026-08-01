@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/eiger-logo-readme.png" alt="Eiger" width="160">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/eiger-logo-readme-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/eiger-logo-readme-light.png">
+    <img src="assets/eiger-logo-readme-light.png" alt="Eiger" width="160">
+  </picture>
 </p>
 
 # Eiger
