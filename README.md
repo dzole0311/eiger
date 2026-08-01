@@ -103,8 +103,6 @@ curl -X POST 'http://127.0.0.1:3000/scrape' \
 
 `POST /pdf` returns raw PDF bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `format`, `landscape`, `printBackground`, `width`, and `height`.
 
-Chrome's print pipeline evaluates responsive CSS breakpoints against paper size, not viewport size. Without `format`, Eiger sizes the paper to `width`/`height` (default `1365x768`) so pages render at their normal desktop layout instead of collapsing to a mobile breakpoint. Pass `format` for a real paper size (Letter, A4, ...) instead.
-
 `GET /sessions` lists active sessions with state, age, RSS, and CPU.
 
 `GET /sessions/view` renders the same session list as a plain HTML table with DevTools links.
