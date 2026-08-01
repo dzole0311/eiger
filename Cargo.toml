@@ -37,4 +37,6 @@ tower_governor = { version = "0.8", default-features = false, features = ["axum"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 urlencoding = "2"
+utoipa = { version = "5.5", features = ["chrono", "uuid"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 uuid = { version = "1", features = ["serde", "v4"] }

@@ -32,6 +32,8 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep, timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message as UpstreamMessage};
 use tracing::{debug, warn};
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 const EIGER_CDP_ID_START: u64 = 9_000_000_000;
@@ -78,6 +80,7 @@ pub fn api_router(state: ApiState) -> Router {
         .route("/sessions/view", get(view_sessions))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/sessions/{id}/cdp", get(connect_existing_session))
+        .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }
 
@@ -92,28 +95,30 @@ struct SessionQuery {
     persistent_profile_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct CreateSessionRequest {
     stealth_enabled: Option<bool>,
     extra_chrome_args: Option<Vec<String>>,
     proxy: Option<String>,
+    #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
     persistent_profile_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct ScrapeRequest {
     url: String,
     wait_until: Option<String>,
     timeout_ms: Option<u64>,
     proxy: Option<String>,
+    #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
     persistent_profile_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct ScreenshotRequest {
     url: String,
@@ -122,11 +127,12 @@ struct ScreenshotRequest {
     full_page: Option<bool>,
     format: Option<String>,
     proxy: Option<String>,
+    #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
     persistent_profile_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct PdfRequest {
     url: String,
@@ -136,6 +142,7 @@ struct PdfRequest {
     landscape: Option<bool>,
     print_background: Option<bool>,
     proxy: Option<String>,
+    #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
     persistent_profile_id: Option<String>,
 }
@@ -164,13 +171,13 @@ struct HealthResponse {
     status: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct ErrorResponse {
     error: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct CreatedSessionResponse {
     id: Uuid,
@@ -179,7 +186,7 @@ struct CreatedSessionResponse {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 struct ScrapeResponse {
     html: String,
@@ -225,6 +232,34 @@ struct CdpConnection {
     lifecycle_events: HashSet<String>,
 }
 
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        scrape,
+        screenshot,
+        pdf,
+        create_session,
+        list_sessions,
+        get_session,
+        delete_session
+    ),
+    components(schemas(
+        CreateSessionRequest,
+        ScrapeRequest,
+        ScreenshotRequest,
+        PdfRequest,
+        ScrapeResponse,
+        CreatedSessionResponse,
+        ErrorResponse,
+        SessionInfo
+    )),
+    tags(
+        (name = "rest", description = "REST convenience endpoints"),
+        (name = "sessions", description = "Browser session management")
+    )
+)]
+struct ApiDoc;
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
@@ -240,6 +275,18 @@ async fn ready(State(state): State<ApiState>) -> Response {
     (status, Json::<PoolReadiness>(readiness)).into_response()
 }
 
+#[utoipa::path(
+    post,
+    path = "/sessions",
+    tag = "sessions",
+    request_body = CreateSessionRequest,
+    responses(
+        (status = 201, description = "Session created", body = CreatedSessionResponse),
+        (status = 400, description = "Invalid session overrides", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 503, description = "Pool at capacity", body = ErrorResponse)
+    )
+)]
 async fn create_session(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -282,6 +329,15 @@ async fn create_session(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions",
+    tag = "sessions",
+    responses(
+        (status = 200, description = "Active sessions", body = Vec<SessionInfo>),
+        (status = 401, description = "Unauthorized", body = ErrorResponse)
+    )
+)]
 async fn list_sessions(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -360,6 +416,17 @@ async fn view_sessions(
         .unwrap()
 }
 
+#[utoipa::path(
+    get,
+    path = "/sessions/{id}",
+    tag = "sessions",
+    params(("id" = Uuid, Path, description = "Session id")),
+    responses(
+        (status = 200, description = "Session", body = SessionInfo),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Session not found", body = ErrorResponse)
+    )
+)]
 async fn get_session(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -376,6 +443,17 @@ async fn get_session(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/sessions/{id}",
+    tag = "sessions",
+    params(("id" = Uuid, Path, description = "Session id")),
+    responses(
+        (status = 204, description = "Session deleted"),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 404, description = "Session not found", body = ErrorResponse)
+    )
+)]
 async fn delete_session(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -410,6 +488,19 @@ async fn metrics(
         .unwrap()
 }
 
+#[utoipa::path(
+    post,
+    path = "/scrape",
+    tag = "rest",
+    request_body = ScrapeRequest,
+    responses(
+        (status = 200, description = "Serialized page DOM", body = ScrapeResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 502, description = "CDP failure", body = ErrorResponse),
+        (status = 504, description = "CDP timeout", body = ErrorResponse)
+    )
+)]
 async fn scrape(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -443,6 +534,19 @@ async fn scrape(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/screenshot",
+    tag = "rest",
+    request_body = ScreenshotRequest,
+    responses(
+        (status = 200, description = "Screenshot bytes", content_type = "image/png"),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 502, description = "CDP failure", body = ErrorResponse),
+        (status = 504, description = "CDP timeout", body = ErrorResponse)
+    )
+)]
 async fn screenshot(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -485,6 +589,19 @@ async fn screenshot(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/pdf",
+    tag = "rest",
+    request_body = PdfRequest,
+    responses(
+        (status = 200, description = "PDF bytes", content_type = "application/pdf"),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 401, description = "Unauthorized", body = ErrorResponse),
+        (status = 502, description = "CDP failure", body = ErrorResponse),
+        (status = 504, description = "CDP timeout", body = ErrorResponse)
+    )
+)]
 async fn pdf(
     State(state): State<ApiState>,
     headers: HeaderMap,

@@ -11,6 +11,7 @@ const scripts = [
   'profile-persistence.mjs',
   'session-view.mjs',
   'node-sdk.mjs',
+  'openapi-docs.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

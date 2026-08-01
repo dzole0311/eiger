@@ -24,9 +24,10 @@ use tokio::{
     time::timeout,
 };
 use tracing::{debug, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionState {
     Launching,
@@ -60,13 +61,14 @@ pub struct SessionOverrides {
     pub persistent_profile_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: Uuid,
     pub state: SessionState,
     pub pid: Option<u32>,
     #[serde(skip_serializing)]
+    #[schema(ignore)]
     pub browser_ws_url: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: DateTime<Utc>,
