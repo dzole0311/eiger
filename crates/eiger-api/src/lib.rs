@@ -21,7 +21,9 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eiger_config::AppConfig;
 use eiger_metrics::render_prometheus;
-use eiger_pool::{PoolError, PoolReadiness, SessionHandle, SessionOverrides, SessionPool};
+use eiger_pool::{
+    PoolError, PoolReadiness, SessionHandle, SessionInfo, SessionOverrides, SessionPool,
+};
 use eiger_stealth::baseline_scripts;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -73,6 +75,7 @@ pub fn api_router(state: ApiState) -> Router {
         .route("/screenshot", post(screenshot))
         .route("/pdf", post(pdf))
         .route("/sessions", get(list_sessions).post(create_session))
+        .route("/sessions/view", get(view_sessions))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/sessions/{id}/cdp", get(connect_existing_session))
         .with_state(state)
@@ -145,6 +148,14 @@ struct LaunchQuery {
     proxy: Option<String>,
     extension_paths: Option<Vec<PathBuf>>,
     persistent_profile_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CdpTargetDescriptor {
+    #[serde(rename = "type")]
+    target_type: String,
+    devtools_frontend_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -281,6 +292,72 @@ async fn list_sessions(
     }
 
     Json(state.pool.list_sessions().await).into_response()
+}
+
+async fn view_sessions(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Query(query): Query<SessionQuery>,
+) -> Response {
+    if !authorized(&state, &headers, query.token.as_deref()) {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    let sessions = state.pool.list_sessions().await;
+    let mut html = String::from(
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Eiger Sessions</title><style>body{font-family:system-ui,sans-serif;margin:24px;color:#111827}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left}th{font-size:12px;text-transform:uppercase;color:#6b7280}td{font-variant-numeric:tabular-nums}a{color:#0369a1}</style></head><body><h1>Sessions</h1><table><thead><tr><th>id</th><th>state</th><th>age</th><th>idle</th><th>rss</th><th>cpu</th><th>pid</th><th>devtools</th></tr></thead><tbody>"#,
+    );
+
+    for session in sessions {
+        let devtools_url = session_devtools_link(&session)
+            .await
+            .unwrap_or_else(|| "#".to_owned());
+        html.push_str("<tr>");
+        html.push_str(&format!(
+            "<td>{}</td>",
+            escape_html(&session.id.to_string())
+        ));
+        html.push_str(&format!(
+            "<td>{}</td>",
+            escape_html(&session.state.to_string())
+        ));
+        html.push_str(&format!("<td>{}</td>", session.age_seconds));
+        html.push_str(&format!("<td>{}</td>", session.idle_seconds));
+        html.push_str(&format!(
+            "<td>{}</td>",
+            session
+                .rss_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        ));
+        html.push_str(&format!(
+            "<td>{}</td>",
+            session
+                .cpu_percent
+                .map(|value| format!("{value:.1}"))
+                .unwrap_or_default()
+        ));
+        html.push_str(&format!(
+            "<td>{}</td>",
+            session
+                .pid
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        ));
+        html.push_str(&format!(
+            r#"<td><a href="{}">devtools</a></td>"#,
+            escape_html(&devtools_url)
+        ));
+        html.push_str("</tr>");
+    }
+
+    html.push_str("</tbody></table></body></html>");
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .unwrap()
 }
 
 async fn get_session(
@@ -1209,6 +1286,61 @@ fn required_string(value: &Value, field: &str) -> Result<String, RestEndpointErr
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| RestEndpointError::InvalidCdpResponse(format!("CDP result missing {field}")))
+}
+
+async fn session_devtools_link(session: &SessionInfo) -> Option<String> {
+    let browser_ws_url = session.browser_ws_url.as_deref()?;
+    if let Some(link) = target_devtools_link(browser_ws_url).await {
+        return Some(link);
+    }
+
+    devtools_url_from_ws(browser_ws_url)
+}
+
+async fn target_devtools_link(browser_ws_url: &str) -> Option<String> {
+    let http_base = cdp_http_base_url(browser_ws_url)?;
+    let targets: Vec<CdpTargetDescriptor> = reqwest::Client::new()
+        .get(format!("{http_base}/json/list"))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    targets
+        .into_iter()
+        .find(|target| target.target_type == "page")
+        .and_then(|target| target.devtools_frontend_url)
+        .and_then(|url| {
+            url.split_once("ws=")
+                .map(|(_, ws)| format!("devtools://devtools/bundled/inspector.html?ws={ws}"))
+        })
+}
+
+fn cdp_http_base_url(browser_ws_url: &str) -> Option<String> {
+    let without_scheme = browser_ws_url
+        .strip_prefix("ws://")
+        .or_else(|| browser_ws_url.strip_prefix("wss://"))?;
+    let (host, _) = without_scheme.split_once("/devtools/")?;
+    Some(format!("http://{host}"))
+}
+
+fn devtools_url_from_ws(ws_url: &str) -> Option<String> {
+    let ws = ws_url
+        .strip_prefix("ws://")
+        .or_else(|| ws_url.strip_prefix("wss://"))?;
+    Some(format!(
+        "devtools://devtools/bundled/inspector.html?ws={ws}"
+    ))
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn authorized(state: &ApiState, headers: &HeaderMap, query_token: Option<&str>) -> bool {

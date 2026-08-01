@@ -9,6 +9,7 @@ const scripts = [
   'proxy-passthrough.mjs',
   'extension-loading.mjs',
   'profile-persistence.mjs',
+  'session-view.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

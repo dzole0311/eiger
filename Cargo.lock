@@ -273,6 +273,7 @@ dependencies = [
  "eiger-stealth",
  "futures-util",
  "http",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
