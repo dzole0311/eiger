@@ -59,10 +59,10 @@ Useful environment variables:
 | `EIGER_CORS_ORIGINS` | unset | Comma-separated exact origins allowed by CORS |
 | `EIGER_RATE_LIMIT_RPS` | `10` | Per-IP and per-token request refill rate |
 | `EIGER_RATE_LIMIT_BURST` | `20` | Per-IP and per-token request burst size |
-| `EIGER_CHROME_EXECUTABLE` | auto-detect | Chrome/Chromium executable path |
+| `EIGER_CHROME_EXECUTABLE` | auto-detect | Chrome/Chromium executable path. `/ready` stays false until launch succeeds |
 | `EIGER_CHROME_NO_SANDBOX` | `true` | Adds `--no-sandbox`, pragmatic for containers |
 | `EIGER_CHROME_ARGS` | unset | Extra whitespace-separated Chrome flags |
-| `EIGER_MAX_CONCURRENT_SESSIONS` | `4` | Global concurrency bound |
+| `EIGER_MAX_CONCURRENT_SESSIONS` | `4` | Global concurrency bound. `/ready` is false at capacity |
 | `EIGER_PER_SESSION_RSS_LIMIT_MB` | `1536` | Soft RSS ceiling for the browser process tree |
 | `EIGER_MAX_SESSION_LIFETIME_SECS` | `1800` | Max lifetime before recycle |
 | `EIGER_MAX_IDLE_TIME_SECS` | `300` | Max idle time before recycle |
@@ -70,7 +70,9 @@ Useful environment variables:
 
 ## API
 
-`GET /health` returns process health.
+`GET /health` returns process liveness only.
+
+`GET /ready` returns readiness. It is ready only after Chrome has launched successfully at least once and the pool has capacity for a new session.
 
 `GET /session` or `GET /` upgrades to a WebSocket, allocates a fresh Chromium session, proxies CDP to it, and recycles it when the WebSocket disconnects.
 

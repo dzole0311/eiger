@@ -2,7 +2,7 @@ use std::{
     fmt,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -74,6 +74,18 @@ pub struct SessionInfo {
     pub kill_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolReadiness {
+    pub status: &'static str,
+    pub can_accept_sessions: bool,
+    pub active_sessions: usize,
+    pub max_concurrent_sessions: usize,
+    pub available_capacity: usize,
+    pub browser_launch_ready: bool,
+    pub last_browser_launch_error: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum PoolError {
     #[error("session pool is at capacity")]
@@ -102,6 +114,8 @@ pub struct SessionPool {
     sessions_lifetime_recycled_total: AtomicU64,
     sessions_process_exit_recycled_total: AtomicU64,
     sessions_cdp_unhealthy_recycled_total: AtomicU64,
+    browser_launch_ready: AtomicBool,
+    last_browser_launch_error: RwLock<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +185,8 @@ impl SessionPool {
             sessions_lifetime_recycled_total: AtomicU64::new(0),
             sessions_process_exit_recycled_total: AtomicU64::new(0),
             sessions_cdp_unhealthy_recycled_total: AtomicU64::new(0),
+            browser_launch_ready: AtomicBool::new(false),
+            last_browser_launch_error: RwLock::new(None),
         })
     }
 
@@ -214,7 +230,18 @@ impl SessionPool {
             .extend(overrides.extra_chrome_args);
 
         let stealth_enabled = launch_options.stealth.enabled;
-        let browser = launch_chrome(launch_options).await?;
+        let browser = match launch_chrome(launch_options).await {
+            Ok(browser) => {
+                self.browser_launch_ready.store(true, Ordering::Relaxed);
+                *self.last_browser_launch_error.write().await = None;
+                browser
+            }
+            Err(error) => {
+                self.browser_launch_ready.store(false, Ordering::Relaxed);
+                *self.last_browser_launch_error.write().await = Some(error.to_string());
+                return Err(PoolError::Browser(error));
+            }
+        };
         let id = Uuid::new_v4();
         let now = Utc::now();
         let instant = Instant::now();
@@ -326,6 +353,26 @@ impl SessionPool {
                 .sessions_cdp_unhealthy_recycled_total
                 .load(Ordering::Relaxed),
             sessions,
+        }
+    }
+
+    pub async fn readiness(&self) -> PoolReadiness {
+        let available_capacity = self.semaphore.available_permits();
+        let browser_launch_ready = self.browser_launch_ready.load(Ordering::Relaxed);
+        let can_accept_sessions = available_capacity > 0 && browser_launch_ready;
+
+        PoolReadiness {
+            status: if can_accept_sessions {
+                "ready"
+            } else {
+                "not_ready"
+            },
+            can_accept_sessions,
+            active_sessions: self.sessions.len(),
+            max_concurrent_sessions: self.options.max_concurrent_sessions,
+            available_capacity,
+            browser_launch_ready,
+            last_browser_launch_error: self.last_browser_launch_error.read().await.clone(),
         }
     }
 

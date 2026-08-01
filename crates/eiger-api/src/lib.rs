@@ -16,7 +16,7 @@ use axum::{
 };
 use eiger_config::AppConfig;
 use eiger_metrics::render_prometheus;
-use eiger_pool::{PoolError, SessionHandle, SessionOverrides, SessionPool};
+use eiger_pool::{PoolError, PoolReadiness, SessionHandle, SessionOverrides, SessionPool};
 use eiger_stealth::baseline_scripts;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -49,10 +49,20 @@ impl ApiState {
 }
 
 pub fn router(state: ApiState) -> Router {
+    liveness_router(state.clone()).merge(api_router(state))
+}
+
+pub fn liveness_router(state: ApiState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/ready", get(ready))
+        .with_state(state)
+}
+
+pub fn api_router(state: ApiState) -> Router {
     Router::new()
         .route("/", get(connect_new_session))
         .route("/session", get(connect_new_session))
-        .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
@@ -105,6 +115,17 @@ struct CreatedSessionResponse {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn ready(State(state): State<ApiState>) -> Response {
+    let readiness = state.pool.readiness().await;
+    let status = if readiness.can_accept_sessions {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (status, Json::<PoolReadiness>(readiness)).into_response()
 }
 
 async fn create_session(
