@@ -12,6 +12,7 @@ const DEFAULT_PER_SESSION_RSS_MB: u64 = 1536;
 pub struct AppConfig {
     pub bind_addr: SocketAddr,
     pub auth: AuthConfig,
+    pub http: HttpConfig,
     pub browser: BrowserConfig,
     pub pool: PoolConfig,
     pub stealth: StealthConfig,
@@ -21,6 +22,12 @@ pub struct AppConfig {
 #[serde(rename_all = "camelCase")]
 pub struct AuthConfig {
     pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpConfig {
+    pub cors_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +70,7 @@ impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let bind_addr = parse_env("EIGER_BIND_ADDR", DEFAULT_BIND_ADDR)?;
         let token = optional_env("EIGER_TOKEN");
+        let cors_origins = comma_separated_env("EIGER_CORS_ORIGINS");
         let executable = optional_env("EIGER_CHROME_EXECUTABLE").map(PathBuf::from);
         let no_sandbox = parse_env("EIGER_CHROME_NO_SANDBOX", "true")?;
         let launch_timeout = seconds_env("EIGER_BROWSER_LAUNCH_TIMEOUT_SECS", 10)?;
@@ -95,6 +103,7 @@ impl AppConfig {
         Ok(Self {
             bind_addr,
             auth: AuthConfig { token },
+            http: HttpConfig { cors_origins },
             browser: BrowserConfig {
                 executable,
                 no_sandbox,
@@ -124,6 +133,21 @@ fn optional_env(name: &'static str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
+fn comma_separated_env(name: &'static str) -> Vec<String> {
+    optional_env(name)
+        .map(|value| comma_separated(&value))
+        .unwrap_or_default()
+}
+
+fn comma_separated(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn parse_env<T>(name: &'static str, default: &str) -> Result<T, ConfigError>
 where
     T: FromStr,
@@ -151,6 +175,9 @@ mod tests {
         let config = AppConfig {
             bind_addr: DEFAULT_BIND_ADDR.parse().unwrap(),
             auth: AuthConfig { token: None },
+            http: HttpConfig {
+                cors_origins: Vec::new(),
+            },
             browser: BrowserConfig {
                 executable: None,
                 no_sandbox: true,
@@ -176,5 +203,13 @@ mod tests {
         assert_eq!(config.pool.per_session_rss_limit_bytes, 1536 * 1024 * 1024);
         assert!(config.browser.no_sandbox);
         assert!(config.stealth.enabled);
+    }
+
+    #[test]
+    fn comma_separated_env_values_are_trimmed() {
+        assert_eq!(
+            comma_separated("https://app.example, https://admin.example ,,"),
+            vec!["https://app.example", "https://admin.example"]
+        );
     }
 }

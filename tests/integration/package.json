@@ -7,6 +7,7 @@
     "playwright": "node playwright-smoke.mjs",
     "adversarial": "node adversarial-disconnect.mjs",
     "process-reap": "node process-reap.mjs",
+    "cors": "node cors-policy.mjs",
     "rss-limit": "node rss-limit.mjs",
     "stealth": "node stealth-check.mjs",
     "load": "node load-test.mjs",
