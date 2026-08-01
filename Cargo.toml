@@ -19,7 +19,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["json", "query", "ws"] }
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 dashmap = "6"
 futures-util = "0.3"
