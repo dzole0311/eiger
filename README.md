@@ -111,6 +111,8 @@ curl -X POST 'http://127.0.0.1:3000/scrape' \
 
 `GET /metrics` returns Prometheus exposition format counters and per-session resource gauges.
 
+`GET /openapi.json` returns the OpenAPI spec. `GET /docs` serves Swagger UI.
+
 ## Node Client
 
 A typed Node client lives in `clients/node`.
