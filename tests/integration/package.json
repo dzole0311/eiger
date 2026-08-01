@@ -9,6 +9,7 @@
     "process-reap": "node process-reap.mjs",
     "cors": "node cors-policy.mjs",
     "compose-token": "node compose-token.mjs",
+    "deployment-docs": "node deployment-docs.mjs",
     "rate-limit": "node rate-limit.mjs",
     "rss-limit": "node rss-limit.mjs",
     "stealth": "node stealth-check.mjs",
