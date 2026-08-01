@@ -105,6 +105,8 @@ curl -X POST 'http://127.0.0.1:3000/scrape' \
 
 `GET /sessions` lists active sessions with state, age, RSS, and CPU.
 
+`GET /sessions/view` renders the same session list as a plain HTML table with DevTools links.
+
 `GET /sessions/:id`, `DELETE /sessions/:id`, and `GET /sessions/:id/cdp` inspect, delete, and connect to a pre-warmed session.
 
 `GET /metrics` returns Prometheus exposition format counters and per-session resource gauges.

@@ -16,6 +16,7 @@ eiger-config = { path = "../eiger-config" }
 eiger-metrics = { path = "../eiger-metrics" }
 eiger-pool = { path = "../eiger-pool" }
 eiger-stealth = { path = "../eiger-stealth" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
