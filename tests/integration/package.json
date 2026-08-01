@@ -12,6 +12,7 @@
     "deployment-docs": "node deployment-docs.mjs",
     "rate-limit": "node rate-limit.mjs",
     "rest": "node rest-endpoints.mjs",
+    "proxy": "node proxy-passthrough.mjs",
     "body-limit": "node body-limit.mjs",
     "launch-queue-timeout": "node launch-queue-timeout.mjs",
     "readiness": "node readiness.mjs",
