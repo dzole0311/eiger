@@ -31,6 +31,7 @@ pub struct ChromeLaunchOptions {
     pub additional_args: Vec<String>,
     pub proxy: Option<String>,
     pub extension_paths: Vec<PathBuf>,
+    pub user_data_dir: Option<PathBuf>,
     pub stealth: StealthProfile,
 }
 
@@ -40,10 +41,16 @@ pub struct LaunchedBrowser {
     pid: u32,
     http_base_url: String,
     browser_ws_url: String,
-    _user_data_dir: TempDir,
+    _user_data_dir: UserDataDir,
     stealth_task: Option<JoinHandle<()>>,
     close_timeout: Duration,
     terminate_timeout: Duration,
+}
+
+#[derive(Debug)]
+enum UserDataDir {
+    Temporary(TempDir),
+    Persistent(PathBuf),
 }
 
 pub trait BrowserDriver {
@@ -90,6 +97,12 @@ pub enum BrowserError {
     LaunchTimeout(Duration),
     #[error("failed to read DevToolsActivePort: {0}")]
     DevtoolsPort(std::io::Error),
+    #[error("failed to prepare user data dir {path}: {source}")]
+    UserDataDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("invalid DevToolsActivePort contents: {0}")]
     InvalidDevtoolsPort(String),
     #[error("CDP HTTP request failed: {0}")]
@@ -118,10 +131,7 @@ struct TargetDescriptor {
 
 pub async fn launch_chrome(options: ChromeLaunchOptions) -> Result<LaunchedBrowser, BrowserError> {
     let executable = resolve_chrome_executable(options.executable.as_deref())?;
-    let user_data_dir = tempfile::Builder::new()
-        .prefix("eiger-chrome-")
-        .tempdir()
-        .map_err(BrowserError::DevtoolsPort)?;
+    let user_data_dir = prepare_user_data_dir(options.user_data_dir.as_deref()).await?;
 
     let mut command = Command::new(&executable);
     command
@@ -172,6 +182,33 @@ pub async fn launch_chrome(options: ChromeLaunchOptions) -> Result<LaunchedBrows
     }
 
     Ok(browser)
+}
+
+impl UserDataDir {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Temporary(temp_dir) => temp_dir.path(),
+            Self::Persistent(path) => path.as_path(),
+        }
+    }
+}
+
+async fn prepare_user_data_dir(path: Option<&Path>) -> Result<UserDataDir, BrowserError> {
+    if let Some(path) = path {
+        fs::create_dir_all(path)
+            .await
+            .map_err(|source| BrowserError::UserDataDir {
+                path: path.display().to_string(),
+                source,
+            })?;
+        return Ok(UserDataDir::Persistent(path.to_path_buf()));
+    }
+
+    tempfile::Builder::new()
+        .prefix("eiger-chrome-")
+        .tempdir()
+        .map(UserDataDir::Temporary)
+        .map_err(BrowserError::DevtoolsPort)
 }
 
 impl LaunchedBrowser {
@@ -758,6 +795,7 @@ mod tests {
             additional_args: Vec::new(),
             proxy: Some("http://proxy.local:8080".to_owned()),
             extension_paths: Vec::new(),
+            user_data_dir: None,
             stealth: StealthProfile::new(true, None),
         };
 
@@ -782,6 +820,7 @@ mod tests {
             additional_args: Vec::new(),
             proxy: None,
             extension_paths: Vec::new(),
+            user_data_dir: None,
             stealth: StealthProfile::new(false, None),
         };
 
@@ -805,6 +844,7 @@ mod tests {
                 PathBuf::from("/opt/eiger/extensions/one"),
                 PathBuf::from("/opt/eiger/extensions/two"),
             ],
+            user_data_dir: None,
             stealth: StealthProfile::new(false, None),
         };
 
