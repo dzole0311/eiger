@@ -11,6 +11,7 @@
     "compose-token": "node compose-token.mjs",
     "deployment-docs": "node deployment-docs.mjs",
     "rate-limit": "node rate-limit.mjs",
+    "rest": "node rest-endpoints.mjs",
     "body-limit": "node body-limit.mjs",
     "launch-queue-timeout": "node launch-queue-timeout.mjs",
     "readiness": "node readiness.mjs",

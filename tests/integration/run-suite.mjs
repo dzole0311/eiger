@@ -5,6 +5,7 @@ const scripts = [
   'deployment-docs.mjs',
   'cors-policy.mjs',
   'rate-limit.mjs',
+  'rest-endpoints.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

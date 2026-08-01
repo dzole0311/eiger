@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use axum::{
@@ -12,8 +15,9 @@ use axum::{
     },
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eiger_config::AppConfig;
 use eiger_metrics::render_prometheus;
 use eiger_pool::{PoolError, PoolReadiness, SessionHandle, SessionOverrides, SessionPool};
@@ -22,7 +26,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, sleep, timeout};
 use tokio_tungstenite::{connect_async, tungstenite::Message as UpstreamMessage};
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -64,6 +68,9 @@ pub fn api_router(state: ApiState) -> Router {
         .route("/", get(connect_new_session))
         .route("/session", get(connect_new_session))
         .route("/metrics", get(metrics))
+        .route("/scrape", post(scrape))
+        .route("/screenshot", post(screenshot))
+        .route("/pdf", post(pdf))
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/sessions/{id}", get(get_session).delete(delete_session))
         .route("/sessions/{id}/cdp", get(connect_existing_session))
@@ -83,6 +90,35 @@ struct SessionQuery {
 struct CreateSessionRequest {
     stealth_enabled: Option<bool>,
     extra_chrome_args: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScrapeRequest {
+    url: String,
+    wait_until: Option<String>,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotRequest {
+    url: String,
+    wait_until: Option<String>,
+    timeout_ms: Option<u64>,
+    full_page: Option<bool>,
+    format: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PdfRequest {
+    url: String,
+    wait_until: Option<String>,
+    timeout_ms: Option<u64>,
+    format: Option<String>,
+    landscape: Option<bool>,
+    print_background: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +147,52 @@ struct CreatedSessionResponse {
     pid: u32,
     cdp_ws_url: String,
     created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScrapeResponse {
+    html: String,
+    title: String,
+    url: String,
+}
+
+#[derive(Debug, Clone)]
+struct PageLoadOptions {
+    url: String,
+    wait_until: WaitUntil,
+    timeout: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WaitUntil {
+    Load,
+    DomContentLoaded,
+    NetworkIdle,
+    NetworkAlmostIdle,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ScreenshotFormat {
+    Png,
+    Jpeg,
+}
+
+#[derive(Debug)]
+enum RestEndpointError {
+    BadRequest(String),
+    Pool(PoolError),
+    CdpWebSocket(tokio_tungstenite::tungstenite::Error),
+    CdpProtocol(String),
+    CdpTimeout(&'static str),
+    InvalidCdpResponse(String),
+    Decode(String),
+}
+
+struct CdpConnection {
+    socket: UpstreamSocket,
+    next_id: u64,
+    lifecycle_events: HashSet<String>,
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -230,6 +312,114 @@ async fn metrics(
         .header(header::CONTENT_TYPE, "text/plain; version=0.0.4")
         .body(Body::from(render_prometheus(&metrics)))
         .unwrap()
+}
+
+async fn scrape(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Query(query): Query<SessionQuery>,
+    Json(payload): Json<ScrapeRequest>,
+) -> Response {
+    if !authorized(&state, &headers, query.token.as_deref()) {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
+        Ok(options) => options,
+        Err(error) => return rest_endpoint_error(error),
+    };
+    let overrides = match session_overrides(&query, None) {
+        Ok(overrides) => overrides,
+        Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
+    };
+
+    match with_rest_session(&state, overrides, |handle| {
+        scrape_with_session(handle, options)
+    })
+    .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => rest_endpoint_error(error),
+    }
+}
+
+async fn screenshot(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Query(query): Query<SessionQuery>,
+    Json(payload): Json<ScreenshotRequest>,
+) -> Response {
+    if !authorized(&state, &headers, query.token.as_deref()) {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    let options = match page_load_options(payload.url, payload.wait_until, payload.timeout_ms) {
+        Ok(options) => options,
+        Err(error) => return rest_endpoint_error(error),
+    };
+    let format = match ScreenshotFormat::parse(payload.format.as_deref()) {
+        Ok(format) => format,
+        Err(error) => return rest_endpoint_error(error),
+    };
+    let full_page = payload.full_page.unwrap_or(false);
+    let overrides = match session_overrides(&query, None) {
+        Ok(overrides) => overrides,
+        Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
+    };
+
+    match with_rest_session(&state, overrides, |handle| {
+        screenshot_with_session(handle, options, format, full_page)
+    })
+    .await
+    {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, format.content_type())
+            .body(Body::from(bytes))
+            .unwrap(),
+        Err(error) => rest_endpoint_error(error),
+    }
+}
+
+async fn pdf(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Query(query): Query<SessionQuery>,
+    Json(payload): Json<PdfRequest>,
+) -> Response {
+    if !authorized(&state, &headers, query.token.as_deref()) {
+        return api_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    let options = match page_load_options(
+        payload.url.clone(),
+        payload.wait_until.clone(),
+        payload.timeout_ms,
+    ) {
+        Ok(options) => options,
+        Err(error) => return rest_endpoint_error(error),
+    };
+    let print_options = match pdf_print_options(&payload) {
+        Ok(options) => options,
+        Err(error) => return rest_endpoint_error(error),
+    };
+    let overrides = match session_overrides(&query, None) {
+        Ok(overrides) => overrides,
+        Err(error) => return api_error(StatusCode::BAD_REQUEST, error),
+    };
+
+    match with_rest_session(&state, overrides, |handle| {
+        pdf_with_session(handle, options, print_options)
+    })
+    .await
+    {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/pdf")
+            .body(Body::from(bytes))
+            .unwrap(),
+        Err(error) => rest_endpoint_error(error),
+    }
 }
 
 async fn connect_new_session(
@@ -517,6 +707,479 @@ fn is_eiger_cdp_response(value: &Value) -> bool {
         .is_some_and(|id| id >= EIGER_CDP_ID_START)
 }
 
+async fn with_rest_session<T, F, Fut>(
+    state: &ApiState,
+    overrides: SessionOverrides,
+    operation: F,
+) -> Result<T, RestEndpointError>
+where
+    F: FnOnce(SessionHandle) -> Fut,
+    Fut: std::future::Future<Output = Result<T, RestEndpointError>>,
+{
+    let handle = state
+        .pool
+        .create_session(overrides)
+        .await
+        .map_err(RestEndpointError::Pool)?;
+    let id = handle.id();
+    handle.mark_in_use().await;
+
+    let result = operation(handle).await;
+    state
+        .pool
+        .terminate_session(id, "rest endpoint completed")
+        .await;
+    result
+}
+
+async fn scrape_with_session(
+    handle: SessionHandle,
+    options: PageLoadOptions,
+) -> Result<ScrapeResponse, RestEndpointError> {
+    let mut cdp = CdpConnection::connect(handle.browser_ws_url()).await?;
+    let session_id = cdp.prepare_page_target(options.timeout).await?;
+    navigate_page(&mut cdp, &session_id, &options).await?;
+
+    let result = cdp
+        .command(
+            Some(&session_id),
+            "Runtime.evaluate",
+            json!({
+                "expression": r#"(() => ({ html: document.documentElement ? document.documentElement.outerHTML : "", title: document.title, url: location.href }))()"#,
+                "returnByValue": true
+            }),
+            options.timeout,
+        )
+        .await?;
+    let value = result
+        .get("result")
+        .and_then(|result| result.get("value"))
+        .ok_or_else(|| {
+            RestEndpointError::InvalidCdpResponse(
+                "Runtime.evaluate missing result.value".to_owned(),
+            )
+        })?;
+
+    Ok(ScrapeResponse {
+        html: value
+            .get("html")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        title: value
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        url: value
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    })
+}
+
+async fn screenshot_with_session(
+    handle: SessionHandle,
+    options: PageLoadOptions,
+    format: ScreenshotFormat,
+    full_page: bool,
+) -> Result<Vec<u8>, RestEndpointError> {
+    let mut cdp = CdpConnection::connect(handle.browser_ws_url()).await?;
+    let session_id = cdp.prepare_page_target(options.timeout).await?;
+    navigate_page(&mut cdp, &session_id, &options).await?;
+
+    if full_page {
+        set_full_page_viewport(&mut cdp, &session_id, options.timeout).await?;
+    }
+
+    let result = cdp
+        .command(
+            Some(&session_id),
+            "Page.captureScreenshot",
+            json!({
+                "format": format.cdp_name(),
+                "fromSurface": true,
+                "captureBeyondViewport": full_page
+            }),
+            options.timeout,
+        )
+        .await?;
+
+    decode_cdp_data(&result)
+}
+
+async fn pdf_with_session(
+    handle: SessionHandle,
+    options: PageLoadOptions,
+    print_options: Value,
+) -> Result<Vec<u8>, RestEndpointError> {
+    let mut cdp = CdpConnection::connect(handle.browser_ws_url()).await?;
+    let session_id = cdp.prepare_page_target(options.timeout).await?;
+    navigate_page(&mut cdp, &session_id, &options).await?;
+
+    let result = cdp
+        .command(
+            Some(&session_id),
+            "Page.printToPDF",
+            print_options,
+            options.timeout,
+        )
+        .await?;
+
+    decode_cdp_data(&result)
+}
+
+async fn navigate_page(
+    cdp: &mut CdpConnection,
+    session_id: &str,
+    options: &PageLoadOptions,
+) -> Result<(), RestEndpointError> {
+    cdp.lifecycle_events.clear();
+    let result = cdp
+        .command(
+            Some(session_id),
+            "Page.navigate",
+            json!({ "url": options.url }),
+            options.timeout,
+        )
+        .await?;
+
+    if let Some(error) = result.get("errorText").and_then(Value::as_str) {
+        return Err(RestEndpointError::CdpProtocol(format!(
+            "Page.navigate failed: {error}"
+        )));
+    }
+
+    cdp.wait_for_lifecycle(session_id, options.wait_until, options.timeout)
+        .await
+}
+
+async fn set_full_page_viewport(
+    cdp: &mut CdpConnection,
+    session_id: &str,
+    wait: Duration,
+) -> Result<(), RestEndpointError> {
+    let metrics = cdp
+        .command(Some(session_id), "Page.getLayoutMetrics", json!({}), wait)
+        .await?;
+    let size = metrics
+        .get("cssContentSize")
+        .or_else(|| metrics.get("contentSize"))
+        .ok_or_else(|| {
+            RestEndpointError::InvalidCdpResponse(
+                "Page.getLayoutMetrics missing content size".to_owned(),
+            )
+        })?;
+    let width = positive_dimension(size.get("width"), "width")?;
+    let height = positive_dimension(size.get("height"), "height")?;
+
+    cdp.command(
+        Some(session_id),
+        "Emulation.setDeviceMetricsOverride",
+        json!({
+            "mobile": false,
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": 1,
+            "screenWidth": width,
+            "screenHeight": height
+        }),
+        wait,
+    )
+    .await?;
+    Ok(())
+}
+
+fn page_load_options(
+    url: String,
+    wait_until: Option<String>,
+    timeout_ms: Option<u64>,
+) -> Result<PageLoadOptions, RestEndpointError> {
+    let url = url.trim().to_owned();
+    if url.is_empty() {
+        return Err(RestEndpointError::BadRequest("url is required".to_owned()));
+    }
+
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
+    if timeout.is_zero() {
+        return Err(RestEndpointError::BadRequest(
+            "timeoutMs must be greater than 0".to_owned(),
+        ));
+    }
+
+    Ok(PageLoadOptions {
+        url,
+        wait_until: WaitUntil::parse(wait_until.as_deref())?,
+        timeout,
+    })
+}
+
+fn pdf_print_options(request: &PdfRequest) -> Result<Value, RestEndpointError> {
+    let mut params = json!({
+        "landscape": request.landscape.unwrap_or(false),
+        "printBackground": request.print_background.unwrap_or(false),
+        "transferMode": "ReturnAsBase64"
+    });
+
+    if let Some(format) = request.format.as_deref() {
+        let (width, height) = pdf_paper_size(format)?;
+        params["paperWidth"] = json!(width);
+        params["paperHeight"] = json!(height);
+    }
+
+    Ok(params)
+}
+
+fn pdf_paper_size(format: &str) -> Result<(f64, f64), RestEndpointError> {
+    let normalized = format.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "letter" => Ok((8.5, 11.0)),
+        "legal" => Ok((8.5, 14.0)),
+        "tabloid" | "ledger" => Ok((11.0, 17.0)),
+        "a0" => Ok((33.1, 46.8)),
+        "a1" => Ok((23.4, 33.1)),
+        "a2" => Ok((16.54, 23.4)),
+        "a3" => Ok((11.7, 16.54)),
+        "a4" => Ok((8.27, 11.7)),
+        "a5" => Ok((5.83, 8.27)),
+        "a6" => Ok((4.13, 5.83)),
+        _ => Err(RestEndpointError::BadRequest(format!(
+            "unsupported pdf format: {format}"
+        ))),
+    }
+}
+
+fn positive_dimension(value: Option<&Value>, name: &str) -> Result<u64, RestEndpointError> {
+    let value = value.and_then(Value::as_f64).ok_or_else(|| {
+        RestEndpointError::InvalidCdpResponse(format!(
+            "Page.getLayoutMetrics missing numeric {name}"
+        ))
+    })?;
+    Ok(value.ceil().max(1.0) as u64)
+}
+
+fn decode_cdp_data(result: &Value) -> Result<Vec<u8>, RestEndpointError> {
+    let data = result.get("data").and_then(Value::as_str).ok_or_else(|| {
+        RestEndpointError::InvalidCdpResponse("CDP result missing data".to_owned())
+    })?;
+
+    BASE64
+        .decode(data)
+        .map_err(|error| RestEndpointError::Decode(error.to_string()))
+}
+
+impl CdpConnection {
+    async fn connect(ws_url: &str) -> Result<Self, RestEndpointError> {
+        let (socket, _) = connect_async(ws_url)
+            .await
+            .map_err(RestEndpointError::CdpWebSocket)?;
+
+        Ok(Self {
+            socket,
+            next_id: 1,
+            lifecycle_events: HashSet::new(),
+        })
+    }
+
+    async fn prepare_page_target(&mut self, wait: Duration) -> Result<String, RestEndpointError> {
+        let created = self
+            .command(
+                None,
+                "Target.createTarget",
+                json!({ "url": "about:blank" }),
+                wait,
+            )
+            .await?;
+        let target_id = required_string(&created, "targetId")?;
+        let attached = self
+            .command(
+                None,
+                "Target.attachToTarget",
+                json!({ "targetId": target_id, "flatten": true }),
+                wait,
+            )
+            .await?;
+        let session_id = required_string(&attached, "sessionId")?;
+
+        self.command(Some(&session_id), "Page.enable", json!({}), wait)
+            .await?;
+        self.command(
+            Some(&session_id),
+            "Page.setLifecycleEventsEnabled",
+            json!({ "enabled": true }),
+            wait,
+        )
+        .await?;
+
+        Ok(session_id)
+    }
+
+    async fn command(
+        &mut self,
+        session_id: Option<&str>,
+        method: &'static str,
+        params: Value,
+        wait: Duration,
+    ) -> Result<Value, RestEndpointError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let mut request = json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        if let Some(session_id) = session_id {
+            request["sessionId"] = Value::String(session_id.to_owned());
+        }
+
+        self.socket
+            .send(UpstreamMessage::Text(request.to_string().into()))
+            .await
+            .map_err(RestEndpointError::CdpWebSocket)?;
+
+        timeout(wait, async {
+            loop {
+                let value = self.next_json_message().await?;
+                if value.get("id").and_then(Value::as_u64) != Some(id) {
+                    continue;
+                }
+
+                if let Some(error) = value.get("error") {
+                    return Err(RestEndpointError::CdpProtocol(error.to_string()));
+                }
+
+                return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+            }
+        })
+        .await
+        .map_err(|_| RestEndpointError::CdpTimeout(method))?
+    }
+
+    async fn wait_for_lifecycle(
+        &mut self,
+        session_id: &str,
+        wait_until: WaitUntil,
+        wait: Duration,
+    ) -> Result<(), RestEndpointError> {
+        let expected = wait_until.lifecycle_name();
+        if self.lifecycle_events.contains(expected) {
+            return Ok(());
+        }
+
+        timeout(wait, async {
+            loop {
+                let value = self.next_json_message().await?;
+                if value.get("sessionId").and_then(Value::as_str) != Some(session_id) {
+                    continue;
+                }
+                if self.lifecycle_events.contains(expected) {
+                    return Ok(());
+                }
+            }
+        })
+        .await
+        .map_err(|_| RestEndpointError::CdpTimeout("Page.lifecycleEvent"))?
+    }
+
+    async fn next_json_message(&mut self) -> Result<Value, RestEndpointError> {
+        loop {
+            let message = self
+                .socket
+                .next()
+                .await
+                .ok_or_else(|| RestEndpointError::CdpProtocol("CDP websocket closed".to_owned()))?
+                .map_err(RestEndpointError::CdpWebSocket)?;
+
+            let UpstreamMessage::Text(text) = message else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|error| RestEndpointError::CdpProtocol(error.to_string()))?;
+            self.record_lifecycle_event(&value);
+            return Ok(value);
+        }
+    }
+
+    fn record_lifecycle_event(&mut self, value: &Value) {
+        if value.get("method").and_then(Value::as_str) != Some("Page.lifecycleEvent") {
+            return;
+        }
+
+        if let Some(name) = value
+            .get("params")
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+        {
+            self.lifecycle_events.insert(name.to_owned());
+        }
+    }
+}
+
+impl WaitUntil {
+    fn parse(value: Option<&str>) -> Result<Self, RestEndpointError> {
+        let Some(value) = value else {
+            return Ok(Self::Load);
+        };
+        match value.trim().to_ascii_lowercase().as_str() {
+            "load" => Ok(Self::Load),
+            "domcontentloaded" => Ok(Self::DomContentLoaded),
+            "networkidle" | "networkidle0" => Ok(Self::NetworkIdle),
+            "networkalmostidle" | "networkidle2" => Ok(Self::NetworkAlmostIdle),
+            _ => Err(RestEndpointError::BadRequest(format!(
+                "unsupported waitUntil value: {value}"
+            ))),
+        }
+    }
+
+    fn lifecycle_name(self) -> &'static str {
+        match self {
+            Self::Load => "load",
+            Self::DomContentLoaded => "DOMContentLoaded",
+            Self::NetworkIdle => "networkIdle",
+            Self::NetworkAlmostIdle => "networkAlmostIdle",
+        }
+    }
+}
+
+impl ScreenshotFormat {
+    fn parse(value: Option<&str>) -> Result<Self, RestEndpointError> {
+        let Some(value) = value else {
+            return Ok(Self::Png);
+        };
+        match value.trim().to_ascii_lowercase().as_str() {
+            "png" => Ok(Self::Png),
+            "jpeg" | "jpg" => Ok(Self::Jpeg),
+            _ => Err(RestEndpointError::BadRequest(format!(
+                "unsupported screenshot format: {value}"
+            ))),
+        }
+    }
+
+    fn cdp_name(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+        }
+    }
+}
+
+fn required_string(value: &Value, field: &str) -> Result<String, RestEndpointError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| RestEndpointError::InvalidCdpResponse(format!("CDP result missing {field}")))
+}
+
 fn authorized(state: &ApiState, headers: &HeaderMap, query_token: Option<&str>) -> bool {
     let Some(expected) = state.token.as_deref() else {
         return true;
@@ -615,6 +1278,29 @@ fn pool_error(error: PoolError) -> Response {
         PoolError::NotFound(_) => api_error(StatusCode::NOT_FOUND, error.to_string()),
         PoolError::NotConnectable(_) => api_error(StatusCode::CONFLICT, error.to_string()),
         PoolError::Browser(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+fn rest_endpoint_error(error: RestEndpointError) -> Response {
+    match error {
+        RestEndpointError::BadRequest(error) => api_error(StatusCode::BAD_REQUEST, error),
+        RestEndpointError::Pool(error) => pool_error(error),
+        RestEndpointError::CdpTimeout(method) => {
+            api_error(StatusCode::GATEWAY_TIMEOUT, format!("{method} timed out"))
+        }
+        RestEndpointError::CdpWebSocket(error) => api_error(
+            StatusCode::BAD_GATEWAY,
+            format!("CDP websocket failed: {error}"),
+        ),
+        RestEndpointError::CdpProtocol(error) => api_error(
+            StatusCode::BAD_GATEWAY,
+            format!("CDP command failed: {error}"),
+        ),
+        RestEndpointError::InvalidCdpResponse(error) => api_error(StatusCode::BAD_GATEWAY, error),
+        RestEndpointError::Decode(error) => api_error(
+            StatusCode::BAD_GATEWAY,
+            format!("CDP base64 decode failed: {error}"),
+        ),
     }
 }
 
