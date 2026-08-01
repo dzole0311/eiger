@@ -129,10 +129,24 @@ struct ScreenshotRequest {
     timeout_ms: Option<u64>,
     full_page: Option<bool>,
     format: Option<String>,
+    quality: Option<u8>,
+    omit_background: Option<bool>,
+    selector: Option<String>,
+    clip: Option<ClipRegion>,
     proxy: Option<String>,
     #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
     persistent_profile_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+struct ClipRegion {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -146,6 +160,15 @@ struct PdfRequest {
     print_background: Option<bool>,
     width: Option<u32>,
     height: Option<u32>,
+    scale: Option<f64>,
+    margin_top: Option<f64>,
+    margin_bottom: Option<f64>,
+    margin_left: Option<f64>,
+    margin_right: Option<f64>,
+    display_header_footer: Option<bool>,
+    header_template: Option<String>,
+    footer_template: Option<String>,
+    prefer_css_page_size: Option<bool>,
     proxy: Option<String>,
     #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
@@ -574,6 +597,12 @@ async fn screenshot(
         Err(error) => return rest_endpoint_error(error),
     };
     let full_page = payload.full_page.unwrap_or(false);
+    let capture = ScreenshotCapture {
+        quality: payload.quality,
+        omit_background: payload.omit_background.unwrap_or(false),
+        selector: payload.selector,
+        clip: payload.clip,
+    };
     let overrides =
         match rest_session_overrides(&query, proxy, extension_paths, persistent_profile_id) {
             Ok(overrides) => overrides,
@@ -581,7 +610,7 @@ async fn screenshot(
         };
 
     match with_rest_session(&state, overrides, |handle| {
-        screenshot_with_session(handle, options, format, full_page)
+        screenshot_with_session(handle, options, format, full_page, capture)
     })
     .await
     {
@@ -1013,11 +1042,19 @@ async fn scrape_with_session(
     })
 }
 
+struct ScreenshotCapture {
+    quality: Option<u8>,
+    omit_background: bool,
+    selector: Option<String>,
+    clip: Option<ClipRegion>,
+}
+
 async fn screenshot_with_session(
     handle: SessionHandle,
     options: PageLoadOptions,
     format: ScreenshotFormat,
     full_page: bool,
+    capture: ScreenshotCapture,
 ) -> Result<Vec<u8>, RestEndpointError> {
     let mut cdp = CdpConnection::connect(handle.browser_ws_url()).await?;
     let session_id = cdp.prepare_page_target(options.timeout).await?;
@@ -1027,20 +1064,93 @@ async fn screenshot_with_session(
         set_full_page_viewport(&mut cdp, &session_id, options.timeout).await?;
     }
 
+    if capture.omit_background {
+        cdp.command(
+            Some(&session_id),
+            "Emulation.setDefaultBackgroundColorOverride",
+            json!({ "color": { "r": 0, "g": 0, "b": 0, "a": 0 } }),
+            options.timeout,
+        )
+        .await?;
+    }
+
+    let clip = match capture.selector.as_deref() {
+        Some(selector) => {
+            Some(resolve_selector_clip(&mut cdp, &session_id, selector, options.timeout).await?)
+        }
+        None => capture.clip,
+    };
+
+    let mut params = json!({
+        "format": format.cdp_name(),
+        "fromSurface": true,
+        "captureBeyondViewport": full_page
+    });
+    if let (ScreenshotFormat::Jpeg, Some(quality)) = (format, capture.quality) {
+        params["quality"] = json!(quality);
+    }
+    if let Some(clip) = clip {
+        params["clip"] = json!({
+            "x": clip.x,
+            "y": clip.y,
+            "width": clip.width,
+            "height": clip.height,
+            "scale": clip.scale.unwrap_or(1.0)
+        });
+    }
+
     let result = cdp
         .command(
             Some(&session_id),
             "Page.captureScreenshot",
-            json!({
-                "format": format.cdp_name(),
-                "fromSurface": true,
-                "captureBeyondViewport": full_page
-            }),
+            params,
             options.timeout,
         )
         .await?;
 
     decode_cdp_data(&result)
+}
+
+async fn resolve_selector_clip(
+    cdp: &mut CdpConnection,
+    session_id: &str,
+    selector: &str,
+    wait: Duration,
+) -> Result<ClipRegion, RestEndpointError> {
+    let encoded_selector = json!(selector);
+    let expression = format!(
+        "(() => {{ const el = document.querySelector({encoded_selector}); \
+         if (!el) return null; \
+         const r = el.getBoundingClientRect(); \
+         return {{ x: r.x, y: r.y, width: r.width, height: r.height }}; }})()"
+    );
+
+    let result = cdp
+        .command(
+            Some(session_id),
+            "Runtime.evaluate",
+            json!({ "expression": expression, "returnByValue": true }),
+            wait,
+        )
+        .await?;
+
+    let value = result.get("result").and_then(|result| result.get("value"));
+    let value = match value {
+        Some(value) if !value.is_null() => value,
+        _ => {
+            return Err(RestEndpointError::BadRequest(format!(
+                "selector not found: {selector}"
+            )));
+        }
+    };
+
+    Ok(ClipRegion {
+        x: value.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+        y: value.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+        width: value.get("width").and_then(Value::as_f64).unwrap_or(0.0),
+        height: value.get("height").and_then(Value::as_f64).unwrap_or(0.0),
+        scale: None,
+    })
 }
 
 async fn pdf_with_session(
@@ -1194,6 +1304,34 @@ fn pdf_print_options(
     };
     params["paperWidth"] = json!(width);
     params["paperHeight"] = json!(height);
+
+    if let Some(scale) = request.scale {
+        params["scale"] = json!(scale);
+    }
+    if let Some(margin) = request.margin_top {
+        params["marginTop"] = json!(margin);
+    }
+    if let Some(margin) = request.margin_bottom {
+        params["marginBottom"] = json!(margin);
+    }
+    if let Some(margin) = request.margin_left {
+        params["marginLeft"] = json!(margin);
+    }
+    if let Some(margin) = request.margin_right {
+        params["marginRight"] = json!(margin);
+    }
+    if let Some(display_header_footer) = request.display_header_footer {
+        params["displayHeaderFooter"] = json!(display_header_footer);
+    }
+    if let Some(header_template) = request.header_template.as_deref() {
+        params["headerTemplate"] = json!(header_template);
+    }
+    if let Some(footer_template) = request.footer_template.as_deref() {
+        params["footerTemplate"] = json!(footer_template);
+    }
+    if let Some(prefer_css_page_size) = request.prefer_css_page_size {
+        params["preferCSSPageSize"] = json!(prefer_css_page_size);
+    }
 
     Ok(params)
 }

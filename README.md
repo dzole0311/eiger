@@ -99,9 +99,9 @@ curl -X POST 'http://127.0.0.1:3000/scrape' \
   -d '{"url":"https://example.com","waitUntil":"domcontentloaded","timeoutMs":30000}'
 ```
 
-`POST /screenshot` returns raw PNG or JPEG bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `fullPage`, and `format`.
+`POST /screenshot` returns raw PNG or JPEG bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `fullPage`, `format`, `quality` (jpeg only), `omitBackground`, `selector`, and `clip` (`{x, y, width, height, scale}`). `selector` clips to that element's bounding box and takes priority over `clip`.
 
-`POST /pdf` returns raw PDF bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `format`, `landscape`, `printBackground`, `width`, and `height`.
+`POST /pdf` returns raw PDF bytes. It accepts `url`, `waitUntil`, `timeoutMs`, `format`, `landscape`, `printBackground`, `width`, `height`, `scale`, `marginTop`, `marginBottom`, `marginLeft`, `marginRight`, `displayHeaderFooter`, `headerTemplate`, `footerTemplate`, and `preferCssPageSize`.
 
 `GET /sessions` lists active sessions with state, age, RSS, and CPU.
 
