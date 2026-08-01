@@ -31,7 +31,7 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
-tower-http = { version = "0.6", features = ["cors", "timeout", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "limit", "timeout", "trace"] }
 tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

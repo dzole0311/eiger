@@ -24,8 +24,15 @@ EIGER_HOST=127.0.0.1:3102 npm run suite
 
 The standard suite runs:
 
+- Compose token configuration check.
+- Deployment docs check.
+- CORS default-deny check.
+- Rate-limit check.
+- Request body limit check.
 - Puppeteer CDP smoke test.
 - Playwright CDP smoke test.
+- Readiness check.
+- Launch queue timeout check.
 - Baseline stealth on/off check.
 - Explicit create/delete process-reaping check.
 - Forceful client-disconnect cleanup check.

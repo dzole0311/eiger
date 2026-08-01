@@ -8,6 +8,7 @@ const DEFAULT_MAX_CONCURRENT_SESSIONS: usize = 4;
 const DEFAULT_PER_SESSION_RSS_MB: u64 = 1536;
 const DEFAULT_RATE_LIMIT_RPS: u32 = 10;
 const DEFAULT_RATE_LIMIT_BURST: u32 = 20;
+const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +32,7 @@ pub struct AuthConfig {
 #[serde(rename_all = "camelCase")]
 pub struct HttpConfig {
     pub cors_origins: Vec<String>,
+    pub request_body_limit_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +83,10 @@ impl AppConfig {
         let bind_addr = parse_env("EIGER_BIND_ADDR", DEFAULT_BIND_ADDR)?;
         let token = optional_env("EIGER_TOKEN");
         let cors_origins = comma_separated_env("EIGER_CORS_ORIGINS");
+        let request_body_limit_bytes = positive_usize_env(
+            "EIGER_REQUEST_BODY_LIMIT_BYTES",
+            DEFAULT_REQUEST_BODY_LIMIT_BYTES,
+        )?;
         let rate_limit_rps = positive_u32_env("EIGER_RATE_LIMIT_RPS", DEFAULT_RATE_LIMIT_RPS)?;
         let rate_limit_burst =
             positive_u32_env("EIGER_RATE_LIMIT_BURST", DEFAULT_RATE_LIMIT_BURST)?;
@@ -116,7 +122,10 @@ impl AppConfig {
         Ok(Self {
             bind_addr,
             auth: AuthConfig { token },
-            http: HttpConfig { cors_origins },
+            http: HttpConfig {
+                cors_origins,
+                request_body_limit_bytes,
+            },
             rate_limit: RateLimitConfig {
                 requests_per_second: rate_limit_rps,
                 burst: rate_limit_burst,
@@ -194,6 +203,17 @@ fn positive_u32_env(name: &'static str, default: u32) -> Result<u32, ConfigError
     Ok(value)
 }
 
+fn positive_usize_env(name: &'static str, default: usize) -> Result<usize, ConfigError> {
+    let value = parse_env::<usize>(name, &default.to_string())?;
+    if value == 0 {
+        return Err(ConfigError::InvalidValue {
+            name,
+            value: value.to_string(),
+        });
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +225,7 @@ mod tests {
             auth: AuthConfig { token: None },
             http: HttpConfig {
                 cors_origins: Vec::new(),
+                request_body_limit_bytes: DEFAULT_REQUEST_BODY_LIMIT_BYTES,
             },
             rate_limit: RateLimitConfig {
                 requests_per_second: DEFAULT_RATE_LIMIT_RPS,
@@ -235,6 +256,7 @@ mod tests {
         assert_eq!(config.pool.per_session_rss_limit_bytes, 1536 * 1024 * 1024);
         assert_eq!(config.rate_limit.requests_per_second, 10);
         assert_eq!(config.rate_limit.burst, 20);
+        assert_eq!(config.http.request_body_limit_bytes, 64 * 1024);
         assert!(config.browser.no_sandbox);
         assert!(config.stealth.enabled);
     }
