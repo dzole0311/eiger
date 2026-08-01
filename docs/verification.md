@@ -66,16 +66,3 @@ cd tests/integration
 npm run docker:quickstart
 npm run docker:shm-footgun
 ```
-
-## Local Results
-
-On this machine, the following passed:
-
-- `cargo fmt --all`
-- `cargo test --workspace`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `EIGER_HOST=127.0.0.1:3102 npm run suite`
-- `EIGER_HOST=127.0.0.1:3102 node load-test.mjs --duration=10 --concurrency=4`
-- `EIGER_HOST=127.0.0.1:3103 EIGER_LEAK_MB=128 npm run rss-limit`
-
-Docker verification was not run because Docker Desktop/daemon was not running and Colima is not installed.
