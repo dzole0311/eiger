@@ -10,6 +10,8 @@
 
 Eiger is a self-hosted headless-browser automation API. It gives Puppeteer and Playwright a stable Chrome DevTools Protocol endpoint with Rust process owning browser lifecycle, resource limits, health checks, etc.
 
+The name comes from the [Eiger](https://en.wikipedia.org/wiki/Eiger), a mountain in the Swiss Alps whose north face is famous as one of the hardest technical climbs in the Alps.
+
 ## Quickstart
 
 ```bash
