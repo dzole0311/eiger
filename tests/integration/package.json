@@ -1,0 +1,23 @@
+{
+  "name": "eiger-integration-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "puppeteer": "node puppeteer-smoke.mjs",
+    "playwright": "node playwright-smoke.mjs",
+    "adversarial": "node adversarial-disconnect.mjs",
+    "process-reap": "node process-reap.mjs",
+    "rss-limit": "node rss-limit.mjs",
+    "stealth": "node stealth-check.mjs",
+    "load": "node load-test.mjs",
+    "load:30m": "node load-test.mjs --duration=1800 --concurrency=10",
+    "suite": "node run-suite.mjs",
+    "docker:quickstart": "node docker-quickstart.mjs",
+    "docker:shm-footgun": "node docker-shm-footgun.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.54.0",
+    "puppeteer-core": "^24.0.0",
+    "ws": "^8.18.0"
+  }
+}
