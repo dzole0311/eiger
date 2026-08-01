@@ -49,7 +49,7 @@ Useful environment variables:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `EIGER_BIND_ADDR` | `0.0.0.0:3000` | HTTP/WebSocket bind address |
-| `EIGER_TOKEN` | unset | Optional shared bearer/query token |
+| `EIGER_TOKEN` | unset | Optional shared bearer/query token. Required by Compose examples |
 | `EIGER_CORS_ORIGINS` | unset | Comma-separated exact origins allowed by CORS |
 | `EIGER_RATE_LIMIT_RPS` | `10` | Per-IP and per-token request refill rate |
 | `EIGER_RATE_LIMIT_BURST` | `20` | Per-IP and per-token request burst size |

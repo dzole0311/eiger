@@ -6,7 +6,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      EIGER_TOKEN: "change-me"
+      # Set EIGER_TOKEN in .env or the host environment before starting Eiger.
+      EIGER_TOKEN: "${EIGER_TOKEN:?set EIGER_TOKEN in .env or host environment}"
       EIGER_MAX_CONCURRENT_SESSIONS: "8"
       EIGER_PER_SESSION_RSS_LIMIT_MB: "512"
       EIGER_MAX_SESSION_LIFETIME_SECS: "1800"

@@ -1,6 +1,7 @@
 import { runNodeScript } from './_helpers.mjs';
 
 const scripts = [
+  'compose-token.mjs',
   'cors-policy.mjs',
   'rate-limit.mjs',
   'puppeteer-smoke.mjs',
