@@ -37,6 +37,9 @@ use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 const EIGER_CDP_ID_START: u64 = 9_000_000_000;
+const DEFAULT_PDF_VIEWPORT_WIDTH: u32 = 1365;
+const DEFAULT_PDF_VIEWPORT_HEIGHT: u32 = 768;
+const PDF_PIXELS_PER_INCH: f64 = 96.0;
 
 type UpstreamSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -141,6 +144,8 @@ struct PdfRequest {
     format: Option<String>,
     landscape: Option<bool>,
     print_background: Option<bool>,
+    width: Option<u32>,
+    height: Option<u32>,
     proxy: Option<String>,
     #[schema(value_type = Option<Vec<String>>)]
     extension_paths: Option<Vec<PathBuf>>,
@@ -623,7 +628,11 @@ async fn pdf(
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
-    let print_options = match pdf_print_options(&payload) {
+    let viewport = (
+        payload.width.unwrap_or(DEFAULT_PDF_VIEWPORT_WIDTH),
+        payload.height.unwrap_or(DEFAULT_PDF_VIEWPORT_HEIGHT),
+    );
+    let print_options = match pdf_print_options(&payload, viewport) {
         Ok(options) => options,
         Err(error) => return rest_endpoint_error(error),
     };
@@ -634,7 +643,7 @@ async fn pdf(
         };
 
     match with_rest_session(&state, overrides, |handle| {
-        pdf_with_session(handle, options, print_options)
+        pdf_with_session(handle, options, print_options, viewport)
     })
     .await
     {
@@ -1038,9 +1047,18 @@ async fn pdf_with_session(
     handle: SessionHandle,
     options: PageLoadOptions,
     print_options: Value,
+    viewport: (u32, u32),
 ) -> Result<Vec<u8>, RestEndpointError> {
     let mut cdp = CdpConnection::connect(handle.browser_ws_url()).await?;
     let session_id = cdp.prepare_page_target(options.timeout).await?;
+    set_viewport(
+        &mut cdp,
+        &session_id,
+        viewport.0,
+        viewport.1,
+        options.timeout,
+    )
+    .await?;
     navigate_page(&mut cdp, &session_id, &options).await?;
 
     let result = cdp
@@ -1099,6 +1117,23 @@ async fn set_full_page_viewport(
     let width = positive_dimension(size.get("width"), "width")?;
     let height = positive_dimension(size.get("height"), "height")?;
 
+    set_viewport(
+        cdp,
+        session_id,
+        width.min(u64::from(u32::MAX)) as u32,
+        height.min(u64::from(u32::MAX)) as u32,
+        wait,
+    )
+    .await
+}
+
+async fn set_viewport(
+    cdp: &mut CdpConnection,
+    session_id: &str,
+    width: u32,
+    height: u32,
+    wait: Duration,
+) -> Result<(), RestEndpointError> {
     cdp.command(
         Some(session_id),
         "Emulation.setDeviceMetricsOverride",
@@ -1140,18 +1175,25 @@ fn page_load_options(
     })
 }
 
-fn pdf_print_options(request: &PdfRequest) -> Result<Value, RestEndpointError> {
+fn pdf_print_options(
+    request: &PdfRequest,
+    viewport: (u32, u32),
+) -> Result<Value, RestEndpointError> {
     let mut params = json!({
         "landscape": request.landscape.unwrap_or(false),
         "printBackground": request.print_background.unwrap_or(false),
         "transferMode": "ReturnAsBase64"
     });
 
-    if let Some(format) = request.format.as_deref() {
-        let (width, height) = pdf_paper_size(format)?;
-        params["paperWidth"] = json!(width);
-        params["paperHeight"] = json!(height);
-    }
+    let (width, height) = match request.format.as_deref() {
+        Some(format) => pdf_paper_size(format)?,
+        None => (
+            f64::from(viewport.0) / PDF_PIXELS_PER_INCH,
+            f64::from(viewport.1) / PDF_PIXELS_PER_INCH,
+        ),
+    };
+    params["paperWidth"] = json!(width);
+    params["paperHeight"] = json!(height);
 
     Ok(params)
 }
