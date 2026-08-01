@@ -7,6 +7,7 @@ const scripts = [
   'rate-limit.mjs',
   'rest-endpoints.mjs',
   'proxy-passthrough.mjs',
+  'extension-loading.mjs',
   'body-limit.mjs',
   'puppeteer-smoke.mjs',
   'playwright-smoke.mjs',

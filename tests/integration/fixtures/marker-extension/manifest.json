@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Eiger Marker Extension",
+  "version": "0.0.1",
+  "background": {
+    "service_worker": "marker-worker.js"
+  }
+}

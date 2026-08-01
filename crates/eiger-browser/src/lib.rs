@@ -30,6 +30,7 @@ pub struct ChromeLaunchOptions {
     pub terminate_timeout: Duration,
     pub additional_args: Vec<String>,
     pub proxy: Option<String>,
+    pub extension_paths: Vec<PathBuf>,
     pub stealth: StealthProfile,
 }
 
@@ -564,7 +565,6 @@ fn chrome_args(user_data_dir: &Path, options: &ChromeLaunchOptions) -> Vec<Strin
         "--disable-component-update".to_owned(),
         "--disable-default-apps".to_owned(),
         "--disable-dev-shm-usage".to_owned(),
-        "--disable-extensions".to_owned(),
         "--disable-gpu".to_owned(),
         "--disable-hang-monitor".to_owned(),
         "--disable-popup-blocking".to_owned(),
@@ -580,12 +580,31 @@ fn chrome_args(user_data_dir: &Path, options: &ChromeLaunchOptions) -> Vec<Strin
         args.push("--no-sandbox".to_owned());
     }
 
+    if !options.extension_paths.is_empty() {
+        args.retain(|arg| arg != "--disable-background-networking");
+    }
+
     if let Some(proxy) = options
         .proxy
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
         args.push(format!("--proxy-server={}", proxy.trim()));
+    }
+
+    if options.extension_paths.is_empty() {
+        args.push("--disable-extensions".to_owned());
+    } else {
+        let extension_paths = options
+            .extension_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        args.push("--disable-features=DisableLoadExtensionCommandLineSwitch".to_owned());
+        args.push("--enable-extensions".to_owned());
+        args.push(format!("--load-extension={extension_paths}"));
+        args.push(format!("--disable-extensions-except={extension_paths}"));
     }
 
     args.extend(options.stealth.chrome_args());
@@ -738,6 +757,7 @@ mod tests {
             terminate_timeout: Duration::from_secs(2),
             additional_args: Vec::new(),
             proxy: Some("http://proxy.local:8080".to_owned()),
+            extension_paths: Vec::new(),
             stealth: StealthProfile::new(true, None),
         };
 
@@ -761,6 +781,7 @@ mod tests {
             terminate_timeout: Duration::from_secs(2),
             additional_args: Vec::new(),
             proxy: None,
+            extension_paths: Vec::new(),
             stealth: StealthProfile::new(false, None),
         };
 
@@ -768,5 +789,35 @@ mod tests {
         let args = chrome_args(temp_dir.path(), &options);
 
         assert!(!args.iter().any(|arg| arg.starts_with("--proxy-server=")));
+    }
+
+    #[test]
+    fn chrome_args_load_extensions_when_set() {
+        let options = ChromeLaunchOptions {
+            executable: None,
+            no_sandbox: false,
+            launch_timeout: Duration::from_secs(10),
+            close_timeout: Duration::from_secs(3),
+            terminate_timeout: Duration::from_secs(2),
+            additional_args: Vec::new(),
+            proxy: None,
+            extension_paths: vec![
+                PathBuf::from("/opt/eiger/extensions/one"),
+                PathBuf::from("/opt/eiger/extensions/two"),
+            ],
+            stealth: StealthProfile::new(false, None),
+        };
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let args = chrome_args(temp_dir.path(), &options);
+        let expected = "/opt/eiger/extensions/one,/opt/eiger/extensions/two";
+
+        assert!(args.contains(&format!("--load-extension={expected}")));
+        assert!(args.contains(&format!("--disable-extensions-except={expected}")));
+        assert!(
+            args.contains(&"--disable-features=DisableLoadExtensionCommandLineSwitch".to_owned())
+        );
+        assert!(args.contains(&"--enable-extensions".to_owned()));
+        assert!(!args.contains(&"--disable-extensions".to_owned()));
     }
 }

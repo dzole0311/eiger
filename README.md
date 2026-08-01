@@ -80,6 +80,8 @@ Useful environment variables:
 
 Pass `proxy=http://host:port` on `/session` or in session JSON bodies to launch Chrome with a single proxy server. This is a direct passthrough to Chrome. It does not rotate proxies or add credentials.
 
+Pass `extensionPaths` in JSON bodies or as a comma-separated query value to load unpacked Chrome extensions. Paths must already exist on the host or container filesystem where Eiger runs. Eiger does not upload extension files. Modern Chrome-branded desktop builds block command-line extension loading. Use Chromium or Chrome for Testing for this path.
+
 `POST /sessions` pre-warms a browser session and returns an Eiger CDP WebSocket URL:
 
 ```bash
