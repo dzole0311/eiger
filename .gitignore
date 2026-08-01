@@ -1,0 +1,6 @@
+/target
+node_modules
+tests/integration/node_modules
+.env
+*.log
+.DS_Store
