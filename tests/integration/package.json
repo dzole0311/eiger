@@ -30,7 +30,7 @@
     "docker:shm-footgun": "node docker-shm-footgun.mjs"
   },
   "devDependencies": {
-    "playwright-core": "^1.54.0",
+    "playwright-core": "^1.64.1",
     "puppeteer-core": "^24.0.0",
     "ws": "^8.18.0"
   }
